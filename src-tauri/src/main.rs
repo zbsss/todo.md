@@ -8,6 +8,8 @@ use std::{
 use tauri::{AppHandle, Manager};
 
 const STATUSES: [&str; 3] = ["todo", "doing", "done"];
+const PROJECT_META_DIR: &str = ".todo.md";
+const LEGACY_PROJECT_META_DIR: &str = ".todo-md";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -448,14 +450,26 @@ fn list_projects_from_registry(registry: &ProjectRegistry) -> Result<Vec<Project
 }
 
 fn read_project_disk_meta(project_dir: &Path) -> Result<ProjectDiskMeta, String> {
-    let meta_path = project_dir.join(".todo-md").join("project.json");
-    let contents = fs::read_to_string(meta_path).map_err(|err| err.to_string())?;
+    let meta_path = project_dir.join(PROJECT_META_DIR).join("project.json");
+    let contents = fs::read_to_string(&meta_path)
+        .or_else(|err| {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                fs::read_to_string(
+                    project_dir
+                        .join(LEGACY_PROJECT_META_DIR)
+                        .join("project.json"),
+                )
+            } else {
+                Err(err)
+            }
+        })
+        .map_err(|err| err.to_string())?;
 
     serde_json::from_str(&contents).map_err(|err| err.to_string())
 }
 
 fn write_project_disk_meta(project_dir: &Path, meta: &ProjectDiskMeta) -> Result<(), String> {
-    let meta_dir = project_dir.join(".todo-md");
+    let meta_dir = project_dir.join(PROJECT_META_DIR);
     fs::create_dir_all(&meta_dir).map_err(|err| err.to_string())?;
 
     let meta_json = serde_json::to_string_pretty(meta).map_err(|err| err.to_string())?;
@@ -919,7 +933,7 @@ fn main() {
             delete_ticket
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Todo MD");
+        .expect("error while running todo.md");
 }
 
 #[cfg(test)]
@@ -930,6 +944,46 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("todo-md-{name}-{}", now_millis()));
         fs::create_dir_all(&dir).expect("create temp project");
         dir
+    }
+
+    #[test]
+    fn project_metadata_uses_todo_dot_md_with_legacy_fallback() {
+        let dir = temp_project_dir("project-meta");
+        let meta = ProjectDiskMeta {
+            id: "inbox".to_string(),
+            name: "Inbox".to_string(),
+            created_at: 42,
+        };
+
+        write_project_disk_meta(&dir, &meta).expect("write project metadata");
+        assert!(dir.join(PROJECT_META_DIR).join("project.json").exists());
+
+        let current = read_project_disk_meta(&dir).expect("read current project metadata");
+        assert_eq!(current.id, "inbox");
+        assert_eq!(current.name, "Inbox");
+        assert_eq!(current.created_at, 42);
+
+        let legacy_dir = temp_project_dir("legacy-project-meta");
+        let legacy_meta_dir = legacy_dir.join(LEGACY_PROJECT_META_DIR);
+        fs::create_dir_all(&legacy_meta_dir).expect("create legacy metadata dir");
+        fs::write(
+            legacy_meta_dir.join("project.json"),
+            serde_json::to_string(&ProjectDiskMeta {
+                id: "legacy".to_string(),
+                name: "Legacy".to_string(),
+                created_at: 7,
+            })
+            .expect("serialize legacy metadata"),
+        )
+        .expect("write legacy metadata");
+
+        let legacy = read_project_disk_meta(&legacy_dir).expect("read legacy project metadata");
+        assert_eq!(legacy.id, "legacy");
+        assert_eq!(legacy.name, "Legacy");
+        assert_eq!(legacy.created_at, 7);
+
+        fs::remove_dir_all(dir).expect("cleanup");
+        fs::remove_dir_all(legacy_dir).expect("cleanup legacy");
     }
 
     #[test]

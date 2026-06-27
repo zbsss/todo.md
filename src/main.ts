@@ -138,9 +138,9 @@ function render() {
     <div class="shell">
       <aside class="sidebar">
         <div class="brand">
-          <div class="brand-mark">MD</div>
+          <div class="brand-mark">.md</div>
           <div>
-            <h1>Todo MD</h1>
+            <h1>todo.md</h1>
             <p>${workspace ? escapeHtml(shortPath(workspace.baseDir)) : "Local Markdown boards"}</p>
           </div>
         </div>
@@ -1109,7 +1109,7 @@ const api = {
 };
 
 const mockStore = (() => {
-  const storageKey = "todo-md-demo";
+  const storageKey = "todo.md-demo";
 
   type Store = {
     workspace: WorkspaceInfo;
@@ -1121,13 +1121,13 @@ const mockStore = (() => {
     const project: ProjectSummary = {
       id: "inbox",
       name: "Inbox",
-      path: "~/Todo MD/projects/inbox",
+      path: "~/todo.md/projects/inbox",
       ticketCount: 3
     };
 
     return {
       workspace: {
-        baseDir: "~/Todo MD/projects",
+        baseDir: "~/todo.md/projects",
         projects: [project]
       },
       tickets: {
@@ -1140,7 +1140,7 @@ const mockStore = (() => {
             order: 1000,
             createdAt: now,
             updatedAt: now,
-            filePath: "~/Todo MD/projects/inbox/capture-app-ideas.md"
+            filePath: "~/todo.md/projects/inbox/capture-app-ideas.md"
           },
           {
             id: "sketch-board-columns",
@@ -1150,7 +1150,7 @@ const mockStore = (() => {
             order: 1000,
             createdAt: now,
             updatedAt: now,
-            filePath: "~/Todo MD/projects/inbox/sketch-board-columns.md"
+            filePath: "~/todo.md/projects/inbox/sketch-board-columns.md"
           },
           {
             id: "keep-tickets-local",
@@ -1160,7 +1160,7 @@ const mockStore = (() => {
             order: 1000,
             createdAt: now,
             updatedAt: now,
-            filePath: "~/Todo MD/projects/inbox/keep-tickets-local.md"
+            filePath: "~/todo.md/projects/inbox/keep-tickets-local.md"
           }
         ]
       }
@@ -1196,7 +1196,7 @@ const mockStore = (() => {
       const project: ProjectSummary = {
         id,
         name,
-        path: `~/Todo MD/projects/${id}`,
+        path: `~/todo.md/projects/${id}`,
         ticketCount: 0
       };
 
@@ -1213,7 +1213,7 @@ const mockStore = (() => {
       const project: ProjectSummary = {
         id,
         name,
-        path: `~/Todo MD/projects/${id}`,
+        path: `~/todo.md/projects/${id}`,
         ticketCount: 0
       };
 
@@ -1238,7 +1238,7 @@ const mockStore = (() => {
         order: (store.tickets[projectId]?.filter((candidate) => candidate.status === status).length ?? 0) * 1000 + 1000,
         createdAt: now,
         updatedAt: now,
-        filePath: `~/Todo MD/projects/${projectId}/${id}.md`
+        filePath: `~/todo.md/projects/${projectId}/${id}.md`
       };
 
       store.tickets[projectId] = [...(store.tickets[projectId] ?? []), ticket];

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Todo MD",
+  "productName": "todo.md",
   "version": "0.1.0",
   "identifier": "com.local.todomd",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Todo MD",
+        "title": "todo.md",
         "width": 1280,
         "height": 820,
         "minWidth": 920,

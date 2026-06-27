@@ -2,7 +2,7 @@
 name = "todo-md"
 version = "0.1.0"
 description = "A lightweight Markdown-backed task board"
-authors = ["Todo MD"]
+authors = ["todo.md"]
 edition = "2021"
 rust-version = "1.77"
 
