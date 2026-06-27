@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
@@ -11,10 +11,25 @@ const STATUSES: [&str; 3] = ["todo", "doing", "done"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ProjectMeta {
+struct ProjectDiskMeta {
     id: String,
     name: String,
     created_at: u128,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectRecord {
+    id: String,
+    name: String,
+    path: String,
+    created_at: u128,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectRegistry {
+    projects: Vec<ProjectRecord>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,31 +71,94 @@ struct TicketPosition {
 
 #[tauri::command]
 fn get_workspace_info(app: AppHandle) -> Result<WorkspaceInfo, String> {
-    let base_dir = workspace_root(&app)?;
-    ensure_seed_data(&base_dir)?;
-    let projects = list_projects_from_disk(&base_dir)?;
+    let default_projects_dir = default_projects_dir(&app)?;
+    let mut registry = load_project_registry(&app)?;
+
+    migrate_default_projects(&default_projects_dir, &mut registry)?;
+
+    if registry.projects.is_empty() {
+        let inbox = create_project_record(&mut registry, &default_projects_dir, "Inbox")?;
+        seed_project(&PathBuf::from(&inbox.path))?;
+    }
+
+    save_project_registry(&app, &registry)?;
 
     Ok(WorkspaceInfo {
-        base_dir: base_dir.to_string_lossy().to_string(),
-        projects,
+        base_dir: default_projects_dir.to_string_lossy().to_string(),
+        projects: list_projects_from_registry(&registry)?,
     })
 }
 
 #[tauri::command]
 fn create_project(app: AppHandle, name: String) -> Result<ProjectSummary, String> {
-    let base_dir = workspace_root(&app)?;
-    let name = name.trim();
+    let default_projects_dir = default_projects_dir(&app)?;
+    let mut registry = load_project_registry(&app)?;
+    let project = create_project_record(&mut registry, &default_projects_dir, &name)?;
 
-    if name.is_empty() {
-        return Err("Project name cannot be empty.".into());
+    save_project_registry(&app, &registry)?;
+    Ok(project)
+}
+
+#[tauri::command]
+fn import_project(app: AppHandle, path: String) -> Result<ProjectSummary, String> {
+    let mut registry = load_project_registry(&app)?;
+    let project_path = canonical_project_path(Path::new(&path))?;
+    let project_path_string = project_path.to_string_lossy().to_string();
+
+    if let Some(record) = registry
+        .projects
+        .iter()
+        .find(|record| same_path_string(&record.path, &project_path_string))
+    {
+        return project_summary(record);
     }
 
-    create_project_on_disk(&base_dir, name)
+    let disk_meta = read_project_disk_meta(&project_path).ok();
+    let fallback_name = project_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(title_from_slug)
+        .unwrap_or_else(|| "Imported project".to_string());
+    let name = disk_meta
+        .as_ref()
+        .map(|meta| clean_title(&meta.name))
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback_name);
+    let id = disk_meta
+        .as_ref()
+        .map(|meta| meta.id.as_str())
+        .filter(|id| safe_segment(id) && !project_id_exists(&registry, id))
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| unique_project_id(&registry, &name));
+    let created_at = disk_meta
+        .as_ref()
+        .map(|meta| meta.created_at)
+        .unwrap_or_else(now_millis);
+
+    write_project_disk_meta(
+        &project_path,
+        &ProjectDiskMeta {
+            id: id.clone(),
+            name: name.clone(),
+            created_at,
+        },
+    )?;
+
+    let record = ProjectRecord {
+        id,
+        name,
+        path: project_path_string,
+        created_at,
+    };
+
+    registry.projects.push(record.clone());
+    save_project_registry(&app, &registry)?;
+    project_summary(&record)
 }
 
 #[tauri::command]
 fn list_tickets(app: AppHandle, project_id: String) -> Result<Vec<Ticket>, String> {
-    let project_dir = project_dir(&workspace_root(&app)?, &project_id)?;
+    let project_dir = project_dir(&app, &project_id)?;
     list_tickets_from_disk(&project_dir)
 }
 
@@ -92,8 +170,8 @@ fn create_ticket(
     title: String,
 ) -> Result<Ticket, String> {
     validate_status(&status)?;
-    let project_dir = project_dir(&workspace_root(&app)?, &project_id)?;
-    let ticket_id = unique_ticket_id(&title);
+    let project_dir = project_dir(&app, &project_id)?;
+    let ticket_id = unique_ticket_id(&project_dir, &title);
     let now = now_millis();
     let order = next_order(&project_dir, &status)?;
 
@@ -121,7 +199,7 @@ fn update_ticket(
     status: String,
 ) -> Result<Ticket, String> {
     validate_status(&status)?;
-    let project_dir = project_dir(&workspace_root(&app)?, &project_id)?;
+    let project_dir = project_dir(&app, &project_id)?;
     let mut ticket = read_ticket(&project_dir, &ticket_id)?;
 
     ticket.title = clean_title(&title);
@@ -138,7 +216,7 @@ fn reorder_tickets(
     project_id: String,
     positions: Vec<TicketPosition>,
 ) -> Result<Vec<Ticket>, String> {
-    let project_dir = project_dir(&workspace_root(&app)?, &project_id)?;
+    let project_dir = project_dir(&app, &project_id)?;
 
     for position in positions {
         validate_status(&position.status)?;
@@ -154,35 +232,120 @@ fn reorder_tickets(
 
 #[tauri::command]
 fn delete_ticket(app: AppHandle, project_id: String, ticket_id: String) -> Result<(), String> {
-    let project_dir = project_dir(&workspace_root(&app)?, &project_id)?;
-    let ticket_path = ticket_path(&project_dir, &ticket_id)?;
+    let project_dir = project_dir(&app, &project_id)?;
+    let ticket = read_ticket(&project_dir, &ticket_id)?;
 
-    fs::remove_file(ticket_path).map_err(|err| err.to_string())
+    fs::remove_file(ticket.file_path).map_err(|err| err.to_string())
 }
 
-fn workspace_root(app: &AppHandle) -> Result<PathBuf, String> {
-    let root = app
-        .path()
-        .app_data_dir()
-        .map_err(|err| err.to_string())?
-        .join("projects");
+fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_data_dir().map_err(|err| err.to_string())?;
 
-    fs::create_dir_all(&root).map_err(|err| err.to_string())?;
-    Ok(root)
+    fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+    Ok(dir)
 }
 
-fn ensure_seed_data(base_dir: &Path) -> Result<(), String> {
-    let has_projects = fs::read_dir(base_dir)
-        .map_err(|err| err.to_string())?
-        .filter_map(Result::ok)
-        .any(|entry| entry.path().is_dir());
+fn default_projects_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app_data_dir(app)?.join("projects");
 
-    if has_projects {
-        return Ok(());
+    fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+    Ok(dir)
+}
+
+fn registry_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app_data_dir(app)?.join("workspace.json"))
+}
+
+fn load_project_registry(app: &AppHandle) -> Result<ProjectRegistry, String> {
+    let path = registry_path(app)?;
+
+    if !path.exists() {
+        return Ok(ProjectRegistry::default());
     }
 
-    let inbox = create_project_on_disk(base_dir, "Inbox")?;
-    let project_dir = project_dir(base_dir, &inbox.id)?;
+    let contents = fs::read_to_string(path).map_err(|err| err.to_string())?;
+    serde_json::from_str(&contents).map_err(|err| err.to_string())
+}
+
+fn save_project_registry(app: &AppHandle, registry: &ProjectRegistry) -> Result<(), String> {
+    let path = registry_path(app)?;
+    let contents = serde_json::to_string_pretty(registry).map_err(|err| err.to_string())?;
+
+    fs::write(path, contents).map_err(|err| err.to_string())
+}
+
+fn migrate_default_projects(
+    default_projects_dir: &Path,
+    registry: &mut ProjectRegistry,
+) -> Result<(), String> {
+    fs::create_dir_all(default_projects_dir).map_err(|err| err.to_string())?;
+
+    let mut registered_paths = registry
+        .projects
+        .iter()
+        .filter_map(|record| canonical_project_path(Path::new(&record.path)).ok())
+        .map(|path| path.to_string_lossy().to_string())
+        .collect::<HashSet<_>>();
+
+    for entry in fs::read_dir(default_projects_dir).map_err(|err| err.to_string())? {
+        let entry = entry.map_err(|err| err.to_string())?;
+        let path = entry.path();
+
+        if !path.is_dir() {
+            continue;
+        }
+
+        let canonical_path = canonical_project_path(&path)?;
+        let canonical_path_string = canonical_path.to_string_lossy().to_string();
+
+        if registered_paths.contains(&canonical_path_string) {
+            continue;
+        }
+
+        let disk_meta = read_project_disk_meta(&canonical_path).ok();
+        let fallback_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(title_from_slug)
+            .unwrap_or_else(|| "Untitled project".to_string());
+        let name = disk_meta
+            .as_ref()
+            .map(|meta| clean_title(&meta.name))
+            .filter(|value| !value.is_empty())
+            .unwrap_or(fallback_name);
+        let id = disk_meta
+            .as_ref()
+            .map(|meta| meta.id.as_str())
+            .filter(|id| safe_segment(id) && !project_id_exists(registry, id))
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| unique_project_id(registry, &name));
+        let created_at = disk_meta
+            .as_ref()
+            .map(|meta| meta.created_at)
+            .unwrap_or_else(now_millis);
+
+        write_project_disk_meta(
+            &canonical_path,
+            &ProjectDiskMeta {
+                id: id.clone(),
+                name: name.clone(),
+                created_at,
+            },
+        )?;
+
+        registry.projects.push(ProjectRecord {
+            id,
+            name,
+            path: canonical_path_string.clone(),
+            created_at,
+        });
+        registered_paths.insert(canonical_path_string);
+    }
+
+    Ok(())
+}
+
+fn seed_project(project_dir: &Path) -> Result<(), String> {
     let now = now_millis();
     let seeds = [
         (
@@ -207,7 +370,7 @@ fn ensure_seed_data(base_dir: &Path) -> Result<(), String> {
 
     for (title, body, status, order) in seeds {
         let ticket = Ticket {
-            id: unique_ticket_id(title),
+            id: unique_ticket_id(project_dir, title),
             title: title.to_string(),
             body: body.to_string(),
             status: status.to_string(),
@@ -217,96 +380,167 @@ fn ensure_seed_data(base_dir: &Path) -> Result<(), String> {
             file_path: String::new(),
         };
 
-        write_ticket(&project_dir, ticket)?;
+        write_ticket(project_dir, ticket)?;
     }
 
     Ok(())
 }
 
-fn create_project_on_disk(base_dir: &Path, name: &str) -> Result<ProjectSummary, String> {
-    fs::create_dir_all(base_dir).map_err(|err| err.to_string())?;
+fn create_project_record(
+    registry: &mut ProjectRegistry,
+    default_projects_dir: &Path,
+    name: &str,
+) -> Result<ProjectSummary, String> {
+    let name = clean_title(name);
 
-    let id = unique_project_id(base_dir, name);
-    let project_dir = base_dir.join(&id);
-    fs::create_dir_all(project_dir.join(".todo-md")).map_err(|err| err.to_string())?;
+    if name.is_empty() {
+        return Err("Project name cannot be empty.".into());
+    }
 
-    let meta = ProjectMeta {
-        id: id.clone(),
-        name: name.to_string(),
-        created_at: now_millis(),
+    let id = unique_project_id(registry, &name);
+    let project_dir = unique_child_dir(default_projects_dir, &name);
+    fs::create_dir_all(&project_dir).map_err(|err| err.to_string())?;
+    let project_dir = canonical_project_path(&project_dir)?;
+    let created_at = now_millis();
+
+    write_project_disk_meta(
+        &project_dir,
+        &ProjectDiskMeta {
+            id: id.clone(),
+            name: name.clone(),
+            created_at,
+        },
+    )?;
+
+    let record = ProjectRecord {
+        id,
+        name,
+        path: project_dir.to_string_lossy().to_string(),
+        created_at,
     };
 
-    let meta_json = serde_json::to_string_pretty(&meta).map_err(|err| err.to_string())?;
-    fs::write(project_dir.join(".todo-md").join("project.json"), meta_json)
-        .map_err(|err| err.to_string())?;
+    registry.projects.push(record.clone());
+    project_summary(&record)
+}
+
+fn project_summary(record: &ProjectRecord) -> Result<ProjectSummary, String> {
+    let project_dir = PathBuf::from(&record.path);
 
     Ok(ProjectSummary {
-        id,
-        name: name.to_string(),
-        path: project_dir.to_string_lossy().to_string(),
-        ticket_count: 0,
+        id: record.id.clone(),
+        name: record.name.clone(),
+        path: record.path.clone(),
+        ticket_count: count_markdown_files(&project_dir)?,
     })
 }
 
-fn list_projects_from_disk(base_dir: &Path) -> Result<Vec<ProjectSummary>, String> {
+fn list_projects_from_registry(registry: &ProjectRegistry) -> Result<Vec<ProjectSummary>, String> {
     let mut projects = Vec::new();
 
-    for entry in fs::read_dir(base_dir).map_err(|err| err.to_string())? {
-        let entry = entry.map_err(|err| err.to_string())?;
-        let path = entry.path();
-
-        if !path.is_dir() {
-            continue;
+    for record in &registry.projects {
+        if Path::new(&record.path).is_dir() {
+            projects.push(project_summary(record)?);
         }
-
-        let fallback_id = entry.file_name().to_string_lossy().to_string();
-        let meta = read_project_meta(&path).unwrap_or(ProjectMeta {
-            id: fallback_id.clone(),
-            name: title_from_slug(&fallback_id),
-            created_at: 0,
-        });
-
-        projects.push(ProjectSummary {
-            id: meta.id,
-            name: meta.name,
-            path: path.to_string_lossy().to_string(),
-            ticket_count: count_markdown_files(&path)?,
-        });
     }
 
     projects.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     Ok(projects)
 }
 
+fn read_project_disk_meta(project_dir: &Path) -> Result<ProjectDiskMeta, String> {
+    let meta_path = project_dir.join(".todo-md").join("project.json");
+    let contents = fs::read_to_string(meta_path).map_err(|err| err.to_string())?;
+
+    serde_json::from_str(&contents).map_err(|err| err.to_string())
+}
+
+fn write_project_disk_meta(project_dir: &Path, meta: &ProjectDiskMeta) -> Result<(), String> {
+    let meta_dir = project_dir.join(".todo-md");
+    fs::create_dir_all(&meta_dir).map_err(|err| err.to_string())?;
+
+    let meta_json = serde_json::to_string_pretty(meta).map_err(|err| err.to_string())?;
+    fs::write(meta_dir.join("project.json"), meta_json).map_err(|err| err.to_string())
+}
+
+fn project_dir(app: &AppHandle, project_id: &str) -> Result<PathBuf, String> {
+    if !safe_segment(project_id) {
+        return Err("Invalid project id.".into());
+    }
+
+    let registry = load_project_registry(app)?;
+    let record = registry
+        .projects
+        .iter()
+        .find(|record| record.id == project_id)
+        .ok_or_else(|| "Project not found.".to_string())?;
+    let path = canonical_project_path(Path::new(&record.path))?;
+
+    if !path.is_dir() {
+        return Err("Project folder not found.".into());
+    }
+
+    Ok(path)
+}
+
 fn list_tickets_from_disk(project_dir: &Path) -> Result<Vec<Ticket>, String> {
     let mut tickets = Vec::new();
+    let mut paths = Vec::new();
 
     for entry in fs::read_dir(project_dir).map_err(|err| err.to_string())? {
         let entry = entry.map_err(|err| err.to_string())?;
         let path = entry.path();
 
+        if entry
+            .file_type()
+            .map_err(|err| err.to_string())?
+            .is_symlink()
+        {
+            continue;
+        }
+
         if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
             continue;
         }
 
+        paths.push(path);
+    }
+
+    paths.sort();
+
+    for path in paths {
         tickets.push(parse_ticket_file(&path)?);
     }
 
+    normalize_ticket_ids(&mut tickets);
     tickets.sort_by(|a, b| {
         status_rank(&a.status)
             .cmp(&status_rank(&b.status))
             .then(a.order.cmp(&b.order))
             .then(a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+            .then(a.file_path.cmp(&b.file_path))
     });
 
     Ok(tickets)
 }
 
-fn read_project_meta(project_dir: &Path) -> Result<ProjectMeta, String> {
-    let meta_path = project_dir.join(".todo-md").join("project.json");
-    let contents = fs::read_to_string(meta_path).map_err(|err| err.to_string())?;
+fn normalize_ticket_ids(tickets: &mut [Ticket]) {
+    let mut used = HashSet::new();
 
-    serde_json::from_str(&contents).map_err(|err| err.to_string())
+    for ticket in tickets {
+        if used.insert(ticket.id.clone()) {
+            continue;
+        }
+
+        let file_stem = Path::new(&ticket.file_path)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(slugify)
+            .unwrap_or_else(|| "ticket".to_string());
+        let base = format!("{}-{}", ticket.id, file_stem);
+
+        ticket.id = unique_ticket_id_from_used(&used, &base);
+        used.insert(ticket.id.clone());
+    }
 }
 
 fn count_markdown_files(project_dir: &Path) -> Result<usize, String> {
@@ -324,26 +558,27 @@ fn count_markdown_files(project_dir: &Path) -> Result<usize, String> {
 }
 
 fn read_ticket(project_dir: &Path, ticket_id: &str) -> Result<Ticket, String> {
-    let path = ticket_path(project_dir, ticket_id)?;
-    parse_ticket_file(&path)
+    list_tickets_from_disk(project_dir)?
+        .into_iter()
+        .find(|ticket| ticket.id == ticket_id)
+        .ok_or_else(|| "Ticket not found.".to_string())
 }
 
 fn parse_ticket_file(path: &Path) -> Result<Ticket, String> {
     let contents = fs::read_to_string(path).map_err(|err| err.to_string())?;
     let normalized = normalize_newlines(&contents);
-    let file_id = path
+    let file_stem = path
         .file_stem()
         .and_then(|stem| stem.to_str())
-        .unwrap_or("ticket")
-        .to_string();
+        .unwrap_or("ticket");
     let (frontmatter, body) = split_frontmatter(&normalized);
     let now = now_millis();
 
     let id = frontmatter
         .get("id")
-        .cloned()
+        .map(|value| value.trim().to_string())
         .filter(|value| safe_segment(value))
-        .unwrap_or_else(|| file_id.clone());
+        .unwrap_or_else(|| slugify(file_stem));
     let status = frontmatter
         .get("status")
         .cloned()
@@ -353,7 +588,7 @@ fn parse_ticket_file(path: &Path) -> Result<Ticket, String> {
         .get("title")
         .cloned()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| infer_title(&body, &file_id));
+        .unwrap_or_else(|| infer_title(&body, file_stem));
 
     Ok(Ticket {
         id,
@@ -384,7 +619,11 @@ fn write_ticket(project_dir: &Path, mut ticket: Ticket) -> Result<Ticket, String
         ticket.title = "Untitled ticket".to_string();
     }
 
-    let path = ticket_path(project_dir, &ticket.id)?;
+    if !safe_segment(&ticket.id) {
+        ticket.id = slugify(&ticket.id);
+    }
+
+    let path = ticket_write_path(project_dir, &ticket)?;
     let body = ticket.body.trim_end();
     let contents = format!(
         "---\nid: {}\ntitle: {}\nstatus: {}\norder: {}\ncreated_at: {}\nupdated_at: {}\n---\n\n{}\n",
@@ -401,6 +640,28 @@ fn write_ticket(project_dir: &Path, mut ticket: Ticket) -> Result<Ticket, String
     ticket.file_path = path.to_string_lossy().to_string();
 
     Ok(ticket)
+}
+
+fn ticket_write_path(project_dir: &Path, ticket: &Ticket) -> Result<PathBuf, String> {
+    if !ticket.file_path.trim().is_empty() {
+        let existing_path = PathBuf::from(&ticket.file_path);
+
+        if path_belongs_to_project(project_dir, &existing_path)? {
+            return Ok(existing_path);
+        }
+    }
+
+    ticket_path(project_dir, &ticket.id)
+}
+
+fn path_belongs_to_project(project_dir: &Path, ticket_path: &Path) -> Result<bool, String> {
+    let project_dir = canonical_project_path(project_dir)?;
+    let Some(parent) = ticket_path.parent() else {
+        return Ok(false);
+    };
+    let parent = canonical_project_path(parent)?;
+
+    Ok(parent == project_dir)
 }
 
 fn split_frontmatter(contents: &str) -> (HashMap<String, String>, String) {
@@ -433,20 +694,6 @@ fn ticket_path(project_dir: &Path, ticket_id: &str) -> Result<PathBuf, String> {
     Ok(project_dir.join(format!("{ticket_id}.md")))
 }
 
-fn project_dir(base_dir: &Path, project_id: &str) -> Result<PathBuf, String> {
-    if !safe_segment(project_id) {
-        return Err("Invalid project id.".into());
-    }
-
-    let dir = base_dir.join(project_id);
-
-    if !dir.is_dir() {
-        return Err("Project not found.".into());
-    }
-
-    Ok(dir)
-}
-
 fn next_order(project_dir: &Path, status: &str) -> Result<i64, String> {
     let tickets = list_tickets_from_disk(project_dir)?;
     let max_order = tickets
@@ -459,17 +706,17 @@ fn next_order(project_dir: &Path, status: &str) -> Result<i64, String> {
     Ok(max_order + 1000)
 }
 
-fn unique_project_id(base_dir: &Path, name: &str) -> String {
+fn unique_project_id(registry: &ProjectRegistry, name: &str) -> String {
     let base = slugify(name);
 
-    if !base_dir.join(&base).exists() {
+    if !project_id_exists(registry, &base) {
         return base;
     }
 
     for index in 2.. {
         let candidate = format!("{base}-{index}");
 
-        if !base_dir.join(&candidate).exists() {
+        if !project_id_exists(registry, &candidate) {
             return candidate;
         }
     }
@@ -477,8 +724,64 @@ fn unique_project_id(base_dir: &Path, name: &str) -> String {
     unreachable!()
 }
 
-fn unique_ticket_id(title: &str) -> String {
-    format!("{}-{}", now_millis(), slugify(title))
+fn project_id_exists(registry: &ProjectRegistry, id: &str) -> bool {
+    registry.projects.iter().any(|project| project.id == id)
+}
+
+fn unique_child_dir(parent: &Path, name: &str) -> PathBuf {
+    let base = slugify(name);
+    let first = parent.join(&base);
+
+    if !first.exists() {
+        return first;
+    }
+
+    for index in 2.. {
+        let candidate = parent.join(format!("{base}-{index}"));
+
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    unreachable!()
+}
+
+fn unique_ticket_id(project_dir: &Path, title: &str) -> String {
+    let base = format!("{}-{}", now_millis(), slugify(title));
+    unique_ticket_id_from_base(project_dir, &base)
+}
+
+fn unique_ticket_id_from_base(project_dir: &Path, base: &str) -> String {
+    if !project_dir.join(format!("{base}.md")).exists() {
+        return base.to_string();
+    }
+
+    for index in 2.. {
+        let candidate = format!("{base}-{index}");
+
+        if !project_dir.join(format!("{candidate}.md")).exists() {
+            return candidate;
+        }
+    }
+
+    unreachable!()
+}
+
+fn unique_ticket_id_from_used(used: &HashSet<String>, base: &str) -> String {
+    if !used.contains(base) {
+        return base.to_string();
+    }
+
+    for index in 2.. {
+        let candidate = format!("{base}-{index}");
+
+        if !used.contains(&candidate) {
+            return candidate;
+        }
+    }
+
+    unreachable!()
 }
 
 fn clean_title(title: &str) -> String {
@@ -578,6 +881,23 @@ fn normalize_newlines(value: &str) -> String {
     value.replace("\r\n", "\n").replace('\r', "\n")
 }
 
+fn canonical_project_path(path: &Path) -> Result<PathBuf, String> {
+    if !path.is_dir() {
+        return Err("Project folder not found.".into());
+    }
+
+    fs::canonicalize(path).map_err(|err| err.to_string())
+}
+
+fn same_path_string(left: &str, right: &str) -> bool {
+    canonical_project_path(Path::new(left))
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_else(|_| left.to_string())
+        == canonical_project_path(Path::new(right))
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|_| right.to_string())
+}
+
 fn now_millis() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -587,9 +907,11 @@ fn now_millis() -> u128 {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             get_workspace_info,
             create_project,
+            import_project,
             list_tickets,
             create_ticket,
             update_ticket,
@@ -598,4 +920,144 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Todo MD");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_project_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("todo-md-{name}-{}", now_millis()));
+        fs::create_dir_all(&dir).expect("create temp project");
+        dir
+    }
+
+    #[test]
+    fn markdown_files_with_spaces_get_safe_ids_and_remain_editable() {
+        let dir = temp_project_dir("spaces");
+        let ticket_path = dir.join("Fix login.md");
+        fs::write(&ticket_path, "# Fix login\n\nBody").expect("write ticket");
+
+        let ticket = read_ticket(&dir, "fix-login").expect("read ticket by generated id");
+        assert_eq!(ticket.title, "Fix login");
+        assert_eq!(ticket.file_path, ticket_path.to_string_lossy());
+
+        let updated = write_ticket(
+            &dir,
+            Ticket {
+                title: "Fix login flow".to_string(),
+                body: "Updated body".to_string(),
+                ..ticket
+            },
+        )
+        .expect("write ticket");
+
+        assert_eq!(updated.file_path, ticket_path.to_string_lossy());
+        assert!(ticket_path.exists());
+        assert!(fs::read_to_string(ticket_path)
+            .expect("read updated ticket")
+            .contains("Fix login flow"));
+
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn frontmatter_ids_do_not_need_to_match_filenames() {
+        let dir = temp_project_dir("frontmatter");
+        let ticket_path = dir.join("Actual filename.md");
+        fs::write(
+            &ticket_path,
+            "---\nid: custom-ticket-id\ntitle: Custom title\nstatus: todo\n---\n\nBody",
+        )
+        .expect("write ticket");
+
+        let ticket = read_ticket(&dir, "custom-ticket-id").expect("read ticket by frontmatter id");
+        assert_eq!(ticket.file_path, ticket_path.to_string_lossy());
+
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn duplicate_frontmatter_ids_are_normalized_per_file() {
+        let dir = temp_project_dir("duplicate-ids");
+        let first_path = dir.join("First ticket.md");
+        let second_path = dir.join("Second ticket.md");
+
+        fs::write(
+            &first_path,
+            "---\nid: duplicate\ntitle: First ticket\nstatus: todo\n---\n\nFirst",
+        )
+        .expect("write first ticket");
+        fs::write(
+            &second_path,
+            "---\nid: duplicate\ntitle: Second ticket\nstatus: todo\n---\n\nSecond",
+        )
+        .expect("write second ticket");
+
+        let tickets = list_tickets_from_disk(&dir).expect("list tickets");
+        let ids = tickets
+            .iter()
+            .map(|ticket| ticket.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, vec!["duplicate", "duplicate-second-ticket"]);
+
+        let second = read_ticket(&dir, "duplicate-second-ticket")
+            .expect("read second duplicate by normalized id");
+        let updated = write_ticket(
+            &dir,
+            Ticket {
+                title: "Second ticket edited".to_string(),
+                body: "Updated second".to_string(),
+                ..second
+            },
+        )
+        .expect("write second duplicate");
+
+        assert_eq!(updated.file_path, second_path.to_string_lossy());
+        assert!(fs::read_to_string(first_path)
+            .expect("read first ticket")
+            .contains("First ticket"));
+        assert!(fs::read_to_string(second_path)
+            .expect("read second ticket")
+            .contains("Second ticket edited"));
+
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_markdown_files_are_not_loaded_as_tickets() {
+        use std::os::unix::fs::symlink;
+
+        let dir = temp_project_dir("symlink");
+        let outside = std::env::temp_dir().join(format!("todo-md-outside-{}.md", now_millis()));
+        let link = dir.join("Linked ticket.md");
+
+        fs::write(
+            &outside,
+            "---\nid: outside\ntitle: Outside\nstatus: todo\n---\n\nOutside",
+        )
+        .expect("write outside ticket");
+        symlink(&outside, &link).expect("create symlink");
+
+        let tickets = list_tickets_from_disk(&dir).expect("list tickets");
+        assert!(tickets.is_empty());
+
+        fs::remove_file(outside).expect("cleanup outside file");
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn ticket_ids_do_not_overwrite_existing_files() {
+        let dir = temp_project_dir("collisions");
+        fs::write(dir.join("same-base.md"), "first").expect("write existing ticket");
+
+        assert_eq!(
+            unique_ticket_id_from_base(&dir, "same-base"),
+            "same-base-2".to_string()
+        );
+
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
 }

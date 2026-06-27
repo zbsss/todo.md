@@ -1,0 +1,1298 @@
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
+import {
+  CircleCheck,
+  createIcons,
+  Eye,
+  Folder,
+  FolderPlus,
+  GripVertical,
+  ListTodo,
+  LoaderCircle,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Save,
+  Trash2,
+  X
+} from "lucide";
+import "./styles.css";
+
+type Status = "todo" | "doing" | "done";
+type EditorMode = "write" | "preview";
+
+type ProjectSummary = {
+  id: string;
+  name: string;
+  path: string;
+  ticketCount: number;
+};
+
+type WorkspaceInfo = {
+  baseDir: string;
+  projects: ProjectSummary[];
+};
+
+type Ticket = {
+  id: string;
+  title: string;
+  body: string;
+  status: Status;
+  order: number;
+  createdAt: number;
+  updatedAt: number;
+  filePath: string;
+};
+
+type TicketDraft = {
+  id: string;
+  title: string;
+  body: string;
+  status: Status;
+};
+
+const columns: Array<{ id: Status; label: string; icon: string }> = [
+  { id: "todo", label: "To do", icon: "list-todo" },
+  { id: "doing", label: "Doing", icon: "loader-circle" },
+  { id: "done", label: "Done", icon: "circle-check" }
+];
+
+const app = document.querySelector<HTMLDivElement>("#app");
+
+if (!app) {
+  throw new Error("App root not found.");
+}
+
+const appRoot = app;
+
+const state: {
+  workspace: WorkspaceInfo | null;
+  selectedProjectId: string | null;
+  tickets: Ticket[];
+  selectedTicketId: string | null;
+  draft: TicketDraft | null;
+  editorMode: EditorMode;
+  draggingId: string | null;
+  isLoading: boolean;
+  error: string | null;
+} = {
+  workspace: null,
+  selectedProjectId: null,
+  tickets: [],
+  selectedTicketId: null,
+  draft: null,
+  editorMode: "write",
+  draggingId: null,
+  isLoading: true,
+  error: null
+};
+
+const isTauriRuntime = "__TAURI_INTERNALS__" in window;
+
+async function main() {
+  bindGlobalKeys();
+  await loadWorkspace();
+}
+
+async function loadWorkspace() {
+  state.isLoading = true;
+  state.error = null;
+  const preferredProjectId = state.selectedProjectId;
+  render();
+
+  try {
+    const workspace = await api.getWorkspaceInfo();
+    state.workspace = workspace;
+    state.selectedProjectId =
+      preferredProjectId && workspace.projects.some((project) => project.id === preferredProjectId)
+        ? preferredProjectId
+        : workspace.projects[0]?.id ?? null;
+
+    if (state.selectedProjectId) {
+      await loadTickets(state.selectedProjectId);
+    } else {
+      state.tickets = [];
+      render();
+    }
+  } catch (error) {
+    showError(error);
+  } finally {
+    state.isLoading = false;
+    render();
+  }
+}
+
+async function loadTickets(projectId: string) {
+  state.error = null;
+  state.tickets = await api.listTickets(projectId);
+  state.tickets.sort(sortTickets);
+}
+
+function render() {
+  const workspace = state.workspace;
+  const currentProject = workspace?.projects.find(
+    (project) => project.id === state.selectedProjectId
+  );
+
+  appRoot.innerHTML = `
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">MD</div>
+          <div>
+            <h1>Todo MD</h1>
+            <p>${workspace ? escapeHtml(shortPath(workspace.baseDir)) : "Local Markdown boards"}</p>
+          </div>
+        </div>
+
+        <form class="new-project" data-action="create-project">
+          <input name="name" placeholder="New project" autocomplete="off" />
+          <button class="icon-button primary" aria-label="Create project" title="Create project">
+            ${icon("plus")}
+          </button>
+        </form>
+
+        <button class="sidebar-action" data-action="import-project" title="Add existing folder">
+          ${icon("folder-plus")}
+          <span>Add folder</span>
+        </button>
+
+        <nav class="project-list" aria-label="Projects">
+          ${renderProjects(workspace?.projects ?? [])}
+        </nav>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Project</p>
+            <h2>${escapeHtml(currentProject?.name ?? "No project")}</h2>
+            <p class="project-path">${escapeHtml(currentProject?.path ?? "Create a project to begin")}</p>
+          </div>
+          <button class="ghost-button" data-action="refresh" title="Refresh board">
+            ${icon("refresh-cw")}
+            <span>Refresh</span>
+          </button>
+        </header>
+
+        ${state.error ? `<div class="notice">${escapeHtml(state.error)}</div>` : ""}
+        ${state.isLoading ? renderLoadingBoard() : renderBoard()}
+      </section>
+    </div>
+
+    ${renderEditor()}
+  `;
+
+  hydrateIcons();
+  bindEvents();
+}
+
+function renderProjects(projects: ProjectSummary[]) {
+  if (!projects.length) {
+    return `<p class="empty-state">No projects yet</p>`;
+  }
+
+  return projects
+    .map((project) => {
+      const isActive = project.id === state.selectedProjectId;
+
+      return `
+        <button class="project-item ${isActive ? "active" : ""}" data-project-id="${escapeAttr(project.id)}">
+          <span class="project-icon">${icon("folder")}</span>
+          <span>
+            <strong>${escapeHtml(project.name)}</strong>
+            <small>${project.ticketCount} ${project.ticketCount === 1 ? "ticket" : "tickets"}</small>
+          </span>
+        </button>
+      `;
+    })
+    .join("");
+}
+
+function renderBoard() {
+  if (!state.selectedProjectId) {
+    return `
+      <div class="empty-board">
+        <h3>Create a project</h3>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="board" aria-label="Task board">
+      ${columns.map(renderColumn).join("")}
+    </div>
+  `;
+}
+
+function renderLoadingBoard() {
+  return `
+    <div class="board">
+      ${columns
+        .map(
+          (column) => `
+            <section class="column">
+              <div class="column-header">
+                <span>${icon(column.icon)}</span>
+                <h3>${column.label}</h3>
+              </div>
+              <div class="skeleton"></div>
+              <div class="skeleton short"></div>
+            </section>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderColumn(column: { id: Status; label: string; icon: string }) {
+  const tickets = ticketsFor(column.id);
+
+  return `
+    <section class="column" data-status="${column.id}">
+      <div class="column-header">
+        <span class="column-icon">${icon(column.icon)}</span>
+        <h3>${column.label}</h3>
+        <span class="count">${tickets.length}</span>
+      </div>
+
+      <div class="ticket-list" data-status="${column.id}">
+        ${tickets.map(renderTicketCard).join("")}
+      </div>
+
+      <form class="quick-add" data-action="create-ticket" data-status="${column.id}">
+        <input name="title" placeholder="Add ticket" autocomplete="off" />
+        <button class="icon-button" aria-label="Add ticket" title="Add ticket">
+          ${icon("plus")}
+        </button>
+      </form>
+    </section>
+  `;
+}
+
+function renderTicketCard(ticket: Ticket) {
+  const renderedBody = renderMarkdown(ticket.body, { compact: true });
+
+  return `
+    <article
+      class="ticket-card"
+      draggable="true"
+      data-ticket-id="${escapeAttr(ticket.id)}"
+      tabindex="0"
+      aria-label="${escapeAttr(ticket.title)}"
+    >
+      <div class="ticket-topline">
+        <h4>${escapeHtml(ticket.title)}</h4>
+        <span>${icon("grip-vertical")}</span>
+      </div>
+      ${renderedBody ? `<div class="markdown card-markdown">${renderedBody}</div>` : ""}
+    </article>
+  `;
+}
+
+function renderEditor() {
+  if (!state.draft) {
+    return "";
+  }
+
+  const ticket = getSelectedTicket();
+
+  if (!ticket) {
+    return "";
+  }
+
+  return `
+    <div class="modal-backdrop" data-action="close-editor">
+      <section class="editor-panel" role="dialog" aria-modal="true" aria-labelledby="editor-title">
+        <header class="editor-header">
+          <div>
+            <p class="eyebrow">Ticket</p>
+            <input id="editor-title" class="title-input" name="title" value="${escapeAttr(state.draft.title)}" />
+          </div>
+          <div class="editor-actions">
+            <select class="status-select" name="status" aria-label="Status">
+              ${columns
+                .map(
+                  (column) => `
+                    <option value="${column.id}" ${column.id === state.draft?.status ? "selected" : ""}>
+                      ${column.label}
+                    </option>
+                  `
+                )
+                .join("")}
+            </select>
+            <button class="icon-button danger" data-action="delete-ticket" aria-label="Delete ticket" title="Delete ticket">
+              ${icon("trash-2")}
+            </button>
+            <button class="icon-button" data-action="close-editor" aria-label="Close editor" title="Close editor">
+              ${icon("x")}
+            </button>
+          </div>
+        </header>
+
+        <div class="mode-tabs" role="tablist">
+          <button class="${state.editorMode === "write" ? "active" : ""}" data-mode="write">
+            ${icon("pencil")}
+            <span>Write</span>
+          </button>
+          <button class="${state.editorMode === "preview" ? "active" : ""}" data-mode="preview">
+            ${icon("eye")}
+            <span>Preview</span>
+          </button>
+        </div>
+
+        <div class="editor-body ${state.editorMode}">
+          <textarea name="body" spellcheck="true">${escapeHtml(state.draft.body)}</textarea>
+          <div class="markdown preview-pane">${renderMarkdown(state.draft.body)}</div>
+        </div>
+
+        <footer class="editor-footer">
+          <p>${escapeHtml(shortPath(ticket.filePath))}</p>
+          <button class="save-button" data-action="save-ticket">
+            ${icon("save")}
+            <span>Save</span>
+          </button>
+        </footer>
+      </section>
+    </div>
+  `;
+}
+
+function bindEvents() {
+  bindProjectEvents();
+  bindTicketEvents();
+  bindEditorEvents();
+}
+
+function bindProjectEvents() {
+  document
+    .querySelector<HTMLFormElement>('[data-action="create-project"]')
+    ?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget as HTMLFormElement | null;
+
+      if (!form) {
+        return;
+      }
+
+      const input = form.elements.namedItem("name") as HTMLInputElement;
+      const name = input.value.trim();
+
+      if (!name) {
+        input.focus();
+        return;
+      }
+
+      if (!confirmDiscardDraft()) {
+        return;
+      }
+
+      try {
+        const project = await api.createProject(name);
+        state.workspace?.projects.push(project);
+        state.workspace?.projects.sort((a, b) => a.name.localeCompare(b.name));
+        state.selectedProjectId = project.id;
+        state.tickets = [];
+        input.value = "";
+        await loadTickets(project.id);
+        render();
+      } catch (error) {
+        showError(error);
+      }
+    });
+
+  document.querySelector<HTMLButtonElement>('[data-action="import-project"]')?.addEventListener("click", async () => {
+    if (!confirmDiscardDraft()) {
+      return;
+    }
+
+    try {
+      const path = isTauriRuntime
+        ? await open({
+            directory: true,
+            multiple: false,
+            title: "Add project folder"
+          })
+        : window.prompt("Project folder name");
+
+      if (typeof path !== "string" || !path.trim()) {
+        return;
+      }
+
+      const project = await api.importProject(path);
+      state.selectedProjectId = project.id;
+      await loadWorkspace();
+    } catch (error) {
+      showError(error);
+    }
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-project-id]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const projectId = button.dataset.projectId;
+
+      if (!projectId || projectId === state.selectedProjectId) {
+        return;
+      }
+
+      if (!confirmDiscardDraft()) {
+        return;
+      }
+
+      try {
+        state.selectedProjectId = projectId;
+        state.selectedTicketId = null;
+        state.draft = null;
+        state.isLoading = true;
+        render();
+        await loadTickets(projectId);
+      } catch (error) {
+        showError(error);
+      } finally {
+        state.isLoading = false;
+        render();
+      }
+    });
+  });
+
+  document.querySelector<HTMLButtonElement>('[data-action="refresh"]')?.addEventListener("click", async () => {
+    if (!confirmDiscardDraft()) {
+      return;
+    }
+
+    try {
+      state.isLoading = true;
+      render();
+      await loadWorkspace();
+    } catch (error) {
+      showError(error);
+    } finally {
+      state.isLoading = false;
+      render();
+    }
+  });
+}
+
+function bindTicketEvents() {
+  document
+    .querySelectorAll<HTMLFormElement>('[data-action="create-ticket"]')
+    .forEach((form) => {
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const currentForm = event.currentTarget as HTMLFormElement | null;
+
+        if (!state.selectedProjectId || !currentForm) {
+          return;
+        }
+
+        const status = currentForm.dataset.status as Status;
+        const input = currentForm.elements.namedItem("title") as HTMLInputElement;
+        const title = input.value.trim();
+
+        if (!title) {
+          input.focus();
+          return;
+        }
+
+        try {
+          const ticket = await api.createTicket(state.selectedProjectId, status, title);
+          state.tickets.push(ticket);
+          state.workspace = updateTicketCount(state.workspace, state.selectedProjectId, 1);
+          input.value = "";
+          render();
+        } catch (error) {
+          showError(error);
+        }
+      });
+    });
+
+  document.querySelectorAll<HTMLElement>(".ticket-card").forEach((card) => {
+    card.addEventListener("click", () => {
+      const ticketId = card.dataset.ticketId;
+
+      if (ticketId) {
+        openEditor(ticketId);
+      }
+    });
+
+    card.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        const ticketId = card.dataset.ticketId;
+
+        if (ticketId) {
+          openEditor(ticketId);
+        }
+      }
+    });
+
+    card.addEventListener("dragstart", (event) => {
+      const ticketId = card.dataset.ticketId;
+
+      if (!ticketId || !event.dataTransfer) {
+        return;
+      }
+
+      state.draggingId = ticketId;
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", ticketId);
+      card.classList.add("is-dragging");
+    });
+
+    card.addEventListener("dragend", () => {
+      state.draggingId = null;
+      document
+        .querySelectorAll(".is-dragging, .is-drag-over")
+        .forEach((node) => node.classList.remove("is-dragging", "is-drag-over"));
+    });
+  });
+
+  document.querySelectorAll<HTMLElement>(".ticket-list").forEach((list) => {
+    list.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      list.classList.add("is-drag-over");
+    });
+
+    list.addEventListener("dragleave", (event) => {
+      if (!list.contains(event.relatedTarget as Node | null)) {
+        list.classList.remove("is-drag-over");
+      }
+    });
+
+    list.addEventListener("drop", async (event) => {
+      event.preventDefault();
+      list.classList.remove("is-drag-over");
+
+      const ticketId = event.dataTransfer?.getData("text/plain") || state.draggingId;
+      const status = list.dataset.status as Status;
+      const targetCard = (event.target as HTMLElement).closest<HTMLElement>(".ticket-card");
+      const beforeId = targetCard?.dataset.ticketId;
+
+      if (!ticketId || !status) {
+        return;
+      }
+
+      await moveTicket(ticketId, status, beforeId);
+    });
+  });
+}
+
+function bindEditorEvents() {
+  const backdrop = document.querySelector<HTMLElement>(".modal-backdrop");
+  const panel = document.querySelector<HTMLElement>(".editor-panel");
+  const titleInput = document.querySelector<HTMLInputElement>('.editor-panel input[name="title"]');
+  const bodyTextarea = document.querySelector<HTMLTextAreaElement>('.editor-panel textarea[name="body"]');
+  const statusSelect = document.querySelector<HTMLSelectElement>('.editor-panel select[name="status"]');
+  const preview = document.querySelector<HTMLElement>(".preview-pane");
+
+  backdrop?.addEventListener("click", (event) => {
+    if (event.target === backdrop) {
+      requestCloseEditor();
+    }
+  });
+
+  panel?.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement;
+    const modeButton = target.closest<HTMLButtonElement>("[data-mode]");
+    const actionButton = target.closest<HTMLButtonElement>("[data-action]");
+
+    if (modeButton?.dataset.mode) {
+      state.editorMode = modeButton.dataset.mode as EditorMode;
+      render();
+      return;
+    }
+
+    if (!actionButton?.dataset.action) {
+      return;
+    }
+
+    const action = actionButton.dataset.action;
+
+    if (action === "close-editor") {
+      requestCloseEditor();
+    }
+
+    if (action === "save-ticket") {
+      void saveDraft();
+    }
+
+    if (action === "delete-ticket") {
+      void deleteSelectedTicket();
+    }
+  });
+
+  titleInput?.addEventListener("input", () => {
+    if (state.draft) {
+      state.draft.title = titleInput.value;
+    }
+  });
+
+  bodyTextarea?.addEventListener("input", () => {
+    if (state.draft) {
+      state.draft.body = bodyTextarea.value;
+      if (preview) {
+        preview.innerHTML = renderMarkdown(state.draft.body);
+      }
+    }
+  });
+
+  statusSelect?.addEventListener("change", () => {
+    if (state.draft) {
+      state.draft.status = statusSelect.value as Status;
+    }
+  });
+}
+
+function bindGlobalKeys() {
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.draft) {
+      requestCloseEditor();
+    }
+
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s" && state.draft) {
+      event.preventDefault();
+      void saveDraft();
+    }
+  });
+}
+
+function openEditor(ticketId: string) {
+  const ticket = state.tickets.find((candidate) => candidate.id === ticketId);
+
+  if (!ticket) {
+    return;
+  }
+
+  state.selectedTicketId = ticketId;
+  state.draft = {
+    id: ticket.id,
+    title: ticket.title,
+    body: ticket.body,
+    status: ticket.status
+  };
+  state.editorMode = "write";
+  render();
+  document.querySelector<HTMLInputElement>("#editor-title")?.focus();
+}
+
+function closeEditor() {
+  state.selectedTicketId = null;
+  state.draft = null;
+  render();
+}
+
+function requestCloseEditor() {
+  if (confirmDiscardDraft()) {
+    closeEditor();
+  }
+}
+
+function confirmDiscardDraft() {
+  if (!hasUnsavedDraft()) {
+    return true;
+  }
+
+  return window.confirm("Discard unsaved changes?");
+}
+
+function hasUnsavedDraft() {
+  const ticket = getSelectedTicket();
+
+  if (!ticket || !state.draft) {
+    return false;
+  }
+
+  return (
+    ticket.title !== state.draft.title ||
+    ticket.body !== state.draft.body ||
+    ticket.status !== state.draft.status
+  );
+}
+
+async function saveDraft() {
+  if (!state.selectedProjectId || !state.draft) {
+    return;
+  }
+
+  try {
+    const updated = await api.updateTicket(
+      state.selectedProjectId,
+      state.draft.id,
+      state.draft.title,
+      state.draft.body,
+      state.draft.status
+    );
+
+    state.tickets = state.tickets.map((ticket) => (ticket.id === updated.id ? updated : ticket)).sort(sortTickets);
+    closeEditor();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function deleteSelectedTicket() {
+  if (!state.selectedProjectId || !state.selectedTicketId) {
+    return;
+  }
+
+  const ticket = getSelectedTicket();
+
+  if (!ticket || !window.confirm(`Delete "${ticket.title}"?`)) {
+    return;
+  }
+
+  try {
+    await api.deleteTicket(state.selectedProjectId, ticket.id);
+    state.tickets = state.tickets.filter((candidate) => candidate.id !== ticket.id);
+    state.workspace = updateTicketCount(state.workspace, state.selectedProjectId, -1);
+    closeEditor();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function moveTicket(ticketId: string, status: Status, beforeId?: string) {
+  if (!state.selectedProjectId) {
+    return;
+  }
+
+  const dragged = state.tickets.find((ticket) => ticket.id === ticketId);
+
+  if (!dragged || beforeId === ticketId) {
+    return;
+  }
+
+  const remaining = state.tickets.filter((ticket) => ticket.id !== ticketId);
+  const nextTicket = { ...dragged, status };
+  const nextTickets = insertTicket(remaining, nextTicket, status, beforeId).map((ticket) => ({ ...ticket }));
+  const positions = renumberTickets(nextTickets);
+
+  state.tickets = nextTickets.sort(sortTickets);
+  render();
+
+  try {
+    state.tickets = await api.reorderTickets(state.selectedProjectId, positions);
+    render();
+  } catch (error) {
+    showError(error);
+    await loadTickets(state.selectedProjectId);
+    render();
+  }
+}
+
+function insertTicket(tickets: Ticket[], ticket: Ticket, status: Status, beforeId?: string) {
+  const next: Ticket[] = [];
+  let inserted = false;
+
+  for (const candidate of tickets.sort(sortTickets)) {
+    if (candidate.status === status && beforeId && candidate.id === beforeId) {
+      next.push(ticket);
+      inserted = true;
+    }
+
+    next.push(candidate);
+  }
+
+  if (!inserted) {
+    next.push(ticket);
+  }
+
+  return next;
+}
+
+function renumberTickets(tickets: Ticket[]) {
+  const nextPositions: Array<{ id: string; status: Status; order: number }> = [];
+
+  for (const status of columns.map((column) => column.id)) {
+    tickets
+      .filter((ticket) => ticket.status === status)
+      .sort(sortTickets)
+      .forEach((ticket, index) => {
+        ticket.order = (index + 1) * 1000;
+        nextPositions.push({
+          id: ticket.id,
+          status: ticket.status,
+          order: ticket.order
+        });
+      });
+  }
+
+  return nextPositions;
+}
+
+function getSelectedTicket() {
+  return state.tickets.find((ticket) => ticket.id === state.selectedTicketId) ?? null;
+}
+
+function ticketsFor(status: Status) {
+  return state.tickets.filter((ticket) => ticket.status === status).sort(sortTickets);
+}
+
+function sortTickets(a: Ticket, b: Ticket) {
+  return statusIndex(a.status) - statusIndex(b.status) || a.order - b.order || a.title.localeCompare(b.title);
+}
+
+function statusIndex(status: Status) {
+  return columns.findIndex((column) => column.id === status);
+}
+
+function updateTicketCount(workspace: WorkspaceInfo | null, projectId: string, delta: number) {
+  if (!workspace) {
+    return workspace;
+  }
+
+  return {
+    ...workspace,
+    projects: workspace.projects.map((project) =>
+      project.id === projectId
+        ? { ...project, ticketCount: Math.max(0, project.ticketCount + delta) }
+        : project
+    )
+  };
+}
+
+function renderMarkdown(markdown: string, options: { compact?: boolean } = {}) {
+  const lines = markdown.trim().split("\n");
+
+  if (!markdown.trim()) {
+    return "";
+  }
+
+  const html: string[] = [];
+  let list: "ul" | "ol" | null = null;
+  let paragraph: string[] = [];
+  let inCode = false;
+  let codeLines: string[] = [];
+
+  const flushParagraph = () => {
+    if (!paragraph.length) {
+      return;
+    }
+
+    html.push(`<p>${renderInline(paragraph.join(" "))}</p>`);
+    paragraph = [];
+  };
+
+  const closeList = () => {
+    if (list) {
+      html.push(`</${list}>`);
+      list = null;
+    }
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (trimmed.startsWith("```")) {
+      if (inCode) {
+        html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+        codeLines = [];
+        inCode = false;
+      } else {
+        flushParagraph();
+        closeList();
+        inCode = true;
+      }
+      continue;
+    }
+
+    if (inCode) {
+      codeLines.push(line);
+      continue;
+    }
+
+    if (!trimmed) {
+      flushParagraph();
+      closeList();
+      continue;
+    }
+
+    const heading = /^(#{1,3})\s+(.+)$/.exec(trimmed);
+
+    if (heading && !options.compact) {
+      flushParagraph();
+      closeList();
+      const level = heading[1].length + 2;
+      html.push(`<h${level}>${renderInline(heading[2])}</h${level}>`);
+      continue;
+    }
+
+    const quote = /^>\s+(.+)$/.exec(trimmed);
+
+    if (quote && !options.compact) {
+      flushParagraph();
+      closeList();
+      html.push(`<blockquote>${renderInline(quote[1])}</blockquote>`);
+      continue;
+    }
+
+    const unordered = /^[-*]\s+(.+)$/.exec(trimmed);
+    const ordered = /^\d+\.\s+(.+)$/.exec(trimmed);
+
+    if (unordered || ordered) {
+      flushParagraph();
+      const nextList = unordered ? "ul" : "ol";
+
+      if (list && list !== nextList) {
+        closeList();
+      }
+
+      if (!list) {
+        html.push(`<${nextList}>`);
+        list = nextList;
+      }
+
+      html.push(`<li>${renderInline((unordered ?? ordered)?.[1] ?? "")}</li>`);
+      continue;
+    }
+
+    closeList();
+    paragraph.push(trimmed.replace(/^#+\s+/, ""));
+  }
+
+  flushParagraph();
+  closeList();
+
+  if (inCode) {
+    html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+  }
+
+  return options.compact ? html.slice(0, 2).join("") : html.join("");
+}
+
+function renderInline(value: string) {
+  const placeholders: string[] = [];
+  let html = escapeHtml(value);
+
+  html = html.replace(/`([^`]+)`/g, (_, code: string) => {
+    const token = `@@TOKEN_${placeholders.length}@@`;
+    placeholders.push(`<code>${code}</code>`);
+    return token;
+  });
+
+  html = html
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
+    .replace(/\[ \]\s+/g, '<input type="checkbox" disabled /> ')
+    .replace(/\[x\]\s+/gi, '<input type="checkbox" checked disabled /> ');
+
+  placeholders.forEach((replacement, index) => {
+    html = html.replace(`@@TOKEN_${index}@@`, replacement);
+  });
+
+  return html;
+}
+
+function icon(name: string) {
+  return `<i data-lucide="${name}" aria-hidden="true"></i>`;
+}
+
+function hydrateIcons() {
+  createIcons({
+    icons: {
+      CircleCheck,
+      Eye,
+      Folder,
+      FolderPlus,
+      GripVertical,
+      ListTodo,
+      LoaderCircle,
+      Pencil,
+      Plus,
+      RefreshCw,
+      Save,
+      Trash2,
+      X
+    }
+  });
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function escapeAttr(value: string) {
+  return escapeHtml(value);
+}
+
+function shortPath(path: string) {
+  const normalized = path.replaceAll("\\", "/");
+  const parts = normalized.split("/").filter(Boolean);
+
+  if (parts.length <= 3) {
+    return normalized;
+  }
+
+  return `.../${parts.slice(-3).join("/")}`;
+}
+
+function showError(error: unknown) {
+  state.error = error instanceof Error ? error.message : String(error);
+  state.isLoading = false;
+  render();
+}
+
+const api = {
+  async getWorkspaceInfo() {
+    if (isTauriRuntime) {
+      return invoke<WorkspaceInfo>("get_workspace_info");
+    }
+
+    return mockStore.getWorkspaceInfo();
+  },
+  async createProject(name: string) {
+    if (isTauriRuntime) {
+      return invoke<ProjectSummary>("create_project", { name });
+    }
+
+    return mockStore.createProject(name);
+  },
+  async importProject(path: string) {
+    if (isTauriRuntime) {
+      return invoke<ProjectSummary>("import_project", { path });
+    }
+
+    return mockStore.importProject(path);
+  },
+  async listTickets(projectId: string) {
+    if (isTauriRuntime) {
+      return invoke<Ticket[]>("list_tickets", { projectId });
+    }
+
+    return mockStore.listTickets(projectId);
+  },
+  async createTicket(projectId: string, status: Status, title: string) {
+    if (isTauriRuntime) {
+      return invoke<Ticket>("create_ticket", { projectId, status, title });
+    }
+
+    return mockStore.createTicket(projectId, status, title);
+  },
+  async updateTicket(projectId: string, ticketId: string, title: string, body: string, status: Status) {
+    if (isTauriRuntime) {
+      return invoke<Ticket>("update_ticket", { projectId, ticketId, title, body, status });
+    }
+
+    return mockStore.updateTicket(projectId, ticketId, title, body, status);
+  },
+  async reorderTickets(projectId: string, positions: Array<{ id: string; status: Status; order: number }>) {
+    if (isTauriRuntime) {
+      return invoke<Ticket[]>("reorder_tickets", { projectId, positions });
+    }
+
+    return mockStore.reorderTickets(projectId, positions);
+  },
+  async deleteTicket(projectId: string, ticketId: string) {
+    if (isTauriRuntime) {
+      return invoke<void>("delete_ticket", { projectId, ticketId });
+    }
+
+    return mockStore.deleteTicket(projectId, ticketId);
+  }
+};
+
+const mockStore = (() => {
+  const storageKey = "todo-md-demo";
+
+  type Store = {
+    workspace: WorkspaceInfo;
+    tickets: Record<string, Ticket[]>;
+  };
+
+  const seed = (): Store => {
+    const now = Date.now();
+    const project: ProjectSummary = {
+      id: "inbox",
+      name: "Inbox",
+      path: "~/Todo MD/projects/inbox",
+      ticketCount: 3
+    };
+
+    return {
+      workspace: {
+        baseDir: "~/Todo MD/projects",
+        projects: [project]
+      },
+      tickets: {
+        inbox: [
+          {
+            id: "capture-app-ideas",
+            title: "Capture app ideas",
+            body: "Use **Markdown** for notes, links, and checklists.\n\n- Keep tickets portable\n- Make project folders easy to inspect",
+            status: "todo",
+            order: 1000,
+            createdAt: now,
+            updatedAt: now,
+            filePath: "~/Todo MD/projects/inbox/capture-app-ideas.md"
+          },
+          {
+            id: "sketch-board-columns",
+            title: "Sketch board columns",
+            body: "Columns are intentionally small for now:\n\n- To do\n- Doing\n- Done",
+            status: "doing",
+            order: 1000,
+            createdAt: now,
+            updatedAt: now,
+            filePath: "~/Todo MD/projects/inbox/sketch-board-columns.md"
+          },
+          {
+            id: "keep-tickets-local",
+            title: "Keep tickets local",
+            body: "Every card is backed by a plain `.md` file on disk.",
+            status: "done",
+            order: 1000,
+            createdAt: now,
+            updatedAt: now,
+            filePath: "~/Todo MD/projects/inbox/keep-tickets-local.md"
+          }
+        ]
+      }
+    };
+  };
+
+  const read = (): Store => {
+    const raw = localStorage.getItem(storageKey);
+
+    if (!raw) {
+      const next = seed();
+      write(next);
+      return next;
+    }
+
+    return JSON.parse(raw) as Store;
+  };
+
+  const write = (store: Store) => localStorage.setItem(storageKey, JSON.stringify(store));
+  const slugify = (value: string) =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "") || "untitled";
+
+  return {
+    async getWorkspaceInfo() {
+      return read().workspace;
+    },
+    async createProject(name: string) {
+      const store = read();
+      const id = `${Date.now()}-${slugify(name)}`;
+      const project: ProjectSummary = {
+        id,
+        name,
+        path: `~/Todo MD/projects/${id}`,
+        ticketCount: 0
+      };
+
+      store.workspace.projects.push(project);
+      store.tickets[id] = [];
+      write(store);
+
+      return project;
+    },
+    async importProject(path: string) {
+      const store = read();
+      const name = path.trim();
+      const id = `${Date.now()}-${slugify(name)}`;
+      const project: ProjectSummary = {
+        id,
+        name,
+        path: `~/Todo MD/projects/${id}`,
+        ticketCount: 0
+      };
+
+      store.workspace.projects.push(project);
+      store.tickets[id] = [];
+      write(store);
+
+      return project;
+    },
+    async listTickets(projectId: string) {
+      return read().tickets[projectId] ?? [];
+    },
+    async createTicket(projectId: string, status: Status, title: string) {
+      const store = read();
+      const now = Date.now();
+      const id = `${now}-${slugify(title)}`;
+      const ticket: Ticket = {
+        id,
+        title,
+        body: "",
+        status,
+        order: (store.tickets[projectId]?.filter((candidate) => candidate.status === status).length ?? 0) * 1000 + 1000,
+        createdAt: now,
+        updatedAt: now,
+        filePath: `~/Todo MD/projects/${projectId}/${id}.md`
+      };
+
+      store.tickets[projectId] = [...(store.tickets[projectId] ?? []), ticket];
+      store.workspace.projects = store.workspace.projects.map((project) =>
+        project.id === projectId ? { ...project, ticketCount: project.ticketCount + 1 } : project
+      );
+      write(store);
+
+      return ticket;
+    },
+    async updateTicket(projectId: string, ticketId: string, title: string, body: string, status: Status) {
+      const store = read();
+      let updated: Ticket | null = null;
+
+      store.tickets[projectId] = (store.tickets[projectId] ?? []).map((ticket) => {
+        if (ticket.id !== ticketId) {
+          return ticket;
+        }
+
+        updated = {
+          ...ticket,
+          title,
+          body,
+          status,
+          updatedAt: Date.now()
+        };
+        return updated;
+      });
+      write(store);
+
+      if (!updated) {
+        throw new Error("Ticket not found.");
+      }
+
+      return updated;
+    },
+    async reorderTickets(projectId: string, positions: Array<{ id: string; status: Status; order: number }>) {
+      const store = read();
+      const positionById = new Map(positions.map((position) => [position.id, position]));
+
+      store.tickets[projectId] = (store.tickets[projectId] ?? []).map((ticket) => {
+        const position = positionById.get(ticket.id);
+
+        return position
+          ? {
+              ...ticket,
+              status: position.status,
+              order: position.order,
+              updatedAt: Date.now()
+            }
+          : ticket;
+      });
+      write(store);
+
+      return store.tickets[projectId];
+    },
+    async deleteTicket(projectId: string, ticketId: string) {
+      const store = read();
+      store.tickets[projectId] = (store.tickets[projectId] ?? []).filter((ticket) => ticket.id !== ticketId);
+      store.workspace.projects = store.workspace.projects.map((project) =>
+        project.id === projectId ? { ...project, ticketCount: Math.max(0, project.ticketCount - 1) } : project
+      );
+      write(store);
+    }
+  };
+})();
+
+void main();
