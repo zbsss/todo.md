@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import {
   CircleCheck,
   createIcons,
@@ -384,7 +384,7 @@ function bindProjectEvents() {
         return;
       }
 
-      if (!confirmDiscardDraft()) {
+      if (!(await confirmDiscardDraft())) {
         return;
       }
 
@@ -403,7 +403,7 @@ function bindProjectEvents() {
     });
 
   document.querySelector<HTMLButtonElement>('[data-action="import-project"]')?.addEventListener("click", async () => {
-    if (!confirmDiscardDraft()) {
+    if (!(await confirmDiscardDraft())) {
       return;
     }
 
@@ -436,7 +436,7 @@ function bindProjectEvents() {
         return;
       }
 
-      if (!confirmDiscardDraft()) {
+      if (!(await confirmDiscardDraft())) {
         return;
       }
 
@@ -457,7 +457,7 @@ function bindProjectEvents() {
   });
 
   document.querySelector<HTMLButtonElement>('[data-action="refresh"]')?.addEventListener("click", async () => {
-    if (!confirmDiscardDraft()) {
+    if (!(await confirmDiscardDraft())) {
       return;
     }
 
@@ -587,7 +587,7 @@ function bindEditorEvents() {
 
   backdrop?.addEventListener("click", (event) => {
     if (event.target === backdrop) {
-      requestCloseEditor();
+      void requestCloseEditor();
     }
   });
 
@@ -609,7 +609,7 @@ function bindEditorEvents() {
     const action = actionButton.dataset.action;
 
     if (action === "close-editor") {
-      requestCloseEditor();
+      void requestCloseEditor();
     }
 
     if (action === "save-ticket") {
@@ -646,7 +646,7 @@ function bindEditorEvents() {
 function bindGlobalKeys() {
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.draft) {
-      requestCloseEditor();
+      void requestCloseEditor();
     }
 
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s" && state.draft) {
@@ -681,18 +681,26 @@ function closeEditor() {
   render();
 }
 
-function requestCloseEditor() {
-  if (confirmDiscardDraft()) {
+async function requestCloseEditor() {
+  if (await confirmDiscardDraft()) {
     closeEditor();
   }
 }
 
-function confirmDiscardDraft() {
+async function confirmDiscardDraft() {
   if (!hasUnsavedDraft()) {
     return true;
   }
 
-  return window.confirm("Discard unsaved changes?");
+  return confirmAction("Discard unsaved changes?", "Unsaved changes");
+}
+
+async function confirmAction(message: string, title: string) {
+  if (isTauriRuntime) {
+    return confirm(message, { title, kind: "warning" });
+  }
+
+  return window.confirm(message);
 }
 
 function hasUnsavedDraft() {
@@ -737,7 +745,7 @@ async function deleteSelectedTicket() {
 
   const ticket = getSelectedTicket();
 
-  if (!ticket || !window.confirm(`Delete "${ticket.title}"?`)) {
+  if (!ticket || !(await confirmAction(`Delete "${ticket.title}"?`, "Delete ticket"))) {
     return;
   }
 
