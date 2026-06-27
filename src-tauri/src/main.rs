@@ -8,6 +8,7 @@ use std::{
 use tauri::{AppHandle, Manager};
 
 const STATUSES: [&str; 3] = ["todo", "doing", "done"];
+const TASKS_DIR: &str = ".tasks";
 const PROJECT_META_DIR: &str = ".todo.md";
 const LEGACY_PROJECT_META_DIR: &str = ".todo-md";
 
@@ -114,6 +115,8 @@ fn import_project(app: AppHandle, path: String) -> Result<ProjectSummary, String
     {
         return project_summary(record);
     }
+
+    ensure_tasks_dir(&project_path)?;
 
     let disk_meta = read_project_disk_meta(&project_path).ok();
     let fallback_name = project_path
@@ -499,8 +502,9 @@ fn project_dir(app: &AppHandle, project_id: &str) -> Result<PathBuf, String> {
 fn list_tickets_from_disk(project_dir: &Path) -> Result<Vec<Ticket>, String> {
     let mut tickets = Vec::new();
     let mut paths = Vec::new();
+    let tasks_dir = ticket_storage_dir(project_dir);
 
-    for entry in fs::read_dir(project_dir).map_err(|err| err.to_string())? {
+    for entry in fs::read_dir(tasks_dir).map_err(|err| err.to_string())? {
         let entry = entry.map_err(|err| err.to_string())?;
         let path = entry.path();
 
@@ -559,8 +563,9 @@ fn normalize_ticket_ids(tickets: &mut [Ticket]) {
 
 fn count_markdown_files(project_dir: &Path) -> Result<usize, String> {
     let mut count = 0;
+    let tasks_dir = ticket_storage_dir(project_dir);
 
-    for entry in fs::read_dir(project_dir).map_err(|err| err.to_string())? {
+    for entry in fs::read_dir(tasks_dir).map_err(|err| err.to_string())? {
         let path = entry.map_err(|err| err.to_string())?.path();
 
         if path.extension().and_then(|ext| ext.to_str()) == Some("md") {
@@ -626,7 +631,8 @@ fn parse_ticket_file(path: &Path) -> Result<Ticket, String> {
 }
 
 fn write_ticket(project_dir: &Path, mut ticket: Ticket) -> Result<Ticket, String> {
-    fs::create_dir_all(project_dir).map_err(|err| err.to_string())?;
+    let tasks_dir = ticket_storage_dir(project_dir);
+    fs::create_dir_all(&tasks_dir).map_err(|err| err.to_string())?;
     ticket.title = clean_title(&ticket.title);
 
     if ticket.title.is_empty() {
@@ -637,7 +643,7 @@ fn write_ticket(project_dir: &Path, mut ticket: Ticket) -> Result<Ticket, String
         ticket.id = slugify(&ticket.id);
     }
 
-    let path = ticket_write_path(project_dir, &ticket)?;
+    let path = ticket_write_path(&tasks_dir, &ticket)?;
     let body = ticket.body.trim_end();
     let contents = format!(
         "---\nid: {}\ntitle: {}\nstatus: {}\norder: {}\ncreated_at: {}\nupdated_at: {}\n---\n\n{}\n",
@@ -656,26 +662,26 @@ fn write_ticket(project_dir: &Path, mut ticket: Ticket) -> Result<Ticket, String
     Ok(ticket)
 }
 
-fn ticket_write_path(project_dir: &Path, ticket: &Ticket) -> Result<PathBuf, String> {
+fn ticket_write_path(tasks_dir: &Path, ticket: &Ticket) -> Result<PathBuf, String> {
     if !ticket.file_path.trim().is_empty() {
         let existing_path = PathBuf::from(&ticket.file_path);
 
-        if path_belongs_to_project(project_dir, &existing_path)? {
+        if path_belongs_to_ticket_storage(tasks_dir, &existing_path)? {
             return Ok(existing_path);
         }
     }
 
-    ticket_path(project_dir, &ticket.id)
+    ticket_path(tasks_dir, &ticket.id)
 }
 
-fn path_belongs_to_project(project_dir: &Path, ticket_path: &Path) -> Result<bool, String> {
-    let project_dir = canonical_project_path(project_dir)?;
+fn path_belongs_to_ticket_storage(tasks_dir: &Path, ticket_path: &Path) -> Result<bool, String> {
+    let tasks_dir = canonical_project_path(tasks_dir)?;
     let Some(parent) = ticket_path.parent() else {
         return Ok(false);
     };
     let parent = canonical_project_path(parent)?;
 
-    Ok(parent == project_dir)
+    Ok(parent == tasks_dir)
 }
 
 fn split_frontmatter(contents: &str) -> (HashMap<String, String>, String) {
@@ -767,19 +773,37 @@ fn unique_ticket_id(project_dir: &Path, title: &str) -> String {
 }
 
 fn unique_ticket_id_from_base(project_dir: &Path, base: &str) -> String {
-    if !project_dir.join(format!("{base}.md")).exists() {
+    let tasks_dir = ticket_storage_dir(project_dir);
+
+    if !tasks_dir.join(format!("{base}.md")).exists() {
         return base.to_string();
     }
 
     for index in 2.. {
         let candidate = format!("{base}-{index}");
 
-        if !project_dir.join(format!("{candidate}.md")).exists() {
+        if !tasks_dir.join(format!("{candidate}.md")).exists() {
             return candidate;
         }
     }
 
     unreachable!()
+}
+
+fn ensure_tasks_dir(project_dir: &Path) -> Result<PathBuf, String> {
+    let tasks_dir = project_dir.join(TASKS_DIR);
+    fs::create_dir_all(&tasks_dir).map_err(|err| err.to_string())?;
+    Ok(tasks_dir)
+}
+
+fn ticket_storage_dir(project_dir: &Path) -> PathBuf {
+    let tasks_dir = project_dir.join(TASKS_DIR);
+
+    if tasks_dir.is_dir() {
+        tasks_dir
+    } else {
+        project_dir.to_path_buf()
+    }
 }
 
 fn unique_ticket_id_from_used(used: &HashSet<String>, base: &str) -> String {
@@ -984,6 +1008,40 @@ mod tests {
 
         fs::remove_dir_all(dir).expect("cleanup");
         fs::remove_dir_all(legacy_dir).expect("cleanup legacy");
+    }
+
+    #[test]
+    fn tasks_directory_is_used_for_ticket_storage_when_present() {
+        let dir = temp_project_dir("tasks-storage");
+        let tasks_dir = ensure_tasks_dir(&dir).expect("create tasks dir");
+
+        fs::write(dir.join("root-note.md"), "# Root note").expect("write root note");
+
+        let ticket = write_ticket(
+            &dir,
+            Ticket {
+                id: "planned-work".to_string(),
+                title: "Planned work".to_string(),
+                body: "Stored away from the imported folder root.".to_string(),
+                status: "todo".to_string(),
+                order: 1000,
+                created_at: 1,
+                updated_at: 1,
+                file_path: String::new(),
+            },
+        )
+        .expect("write ticket");
+
+        let expected_path = tasks_dir.join("planned-work.md");
+        assert_eq!(ticket.file_path, expected_path.to_string_lossy());
+        assert!(expected_path.exists());
+        assert_eq!(count_markdown_files(&dir).expect("count tickets"), 1);
+
+        let tickets = list_tickets_from_disk(&dir).expect("list tickets");
+        assert_eq!(tickets.len(), 1);
+        assert_eq!(tickets[0].id, "planned-work");
+
+        fs::remove_dir_all(dir).expect("cleanup");
     }
 
     #[test]

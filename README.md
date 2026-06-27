@@ -19,4 +19,4 @@ The default bundle target is the runnable macOS `.app` bundle.
 
 ## Storage
 
-todo.md creates new projects under the app data directory by default, and you can add an existing folder as a project from the sidebar. Each ticket is a `.md` file with small frontmatter for board metadata and normal Markdown content beneath it.
+todo.md creates new projects under the app data directory by default, and you can add an existing folder as a project from the sidebar. When you add an existing folder, todo.md creates a `.tasks` directory inside it and stores ticket `.md` files there. Each ticket file has small frontmatter for board metadata and normal Markdown content beneath it.
