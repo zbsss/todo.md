@@ -69,10 +69,15 @@ button {
 
 .brand {
   display: grid;
-  grid-template-columns: 44px 1fr;
+  grid-template-columns: 44px minmax(0, 1fr);
   gap: 12px;
   align-items: center;
   min-width: 0;
+}
+
+.brand > div:not(.brand-mark) {
+  min-width: 0;
+  overflow: hidden;
 }
 
 .brand-mark {
@@ -101,13 +106,18 @@ button {
 }
 
 .brand h1 {
+  overflow: hidden;
   font-size: 1.02rem;
   line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .brand p,
 .project-path,
 .editor-footer p {
+  display: block;
+  max-width: 100%;
   overflow: hidden;
   color: var(--muted);
   font-size: 0.78rem;
@@ -342,7 +352,9 @@ select:focus {
 }
 
 .topbar > div {
+  flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
 }
 
 .eyebrow {
@@ -354,9 +366,13 @@ select:focus {
 }
 
 .topbar h2 {
+  max-width: 100%;
+  overflow: hidden;
   overflow-wrap: anywhere;
   font-size: clamp(1.5rem, 2.5vw, 2.35rem);
   line-height: 1.05;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ghost-button,
