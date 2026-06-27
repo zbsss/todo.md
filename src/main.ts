@@ -547,24 +547,27 @@ function bindTicketEvents() {
     });
   });
 
-  document.querySelectorAll<HTMLElement>(".ticket-list").forEach((list) => {
-    list.addEventListener("dragover", (event) => {
+  document.querySelectorAll<HTMLElement>(".column").forEach((column) => {
+    column.addEventListener("dragover", (event) => {
       event.preventDefault();
-      list.classList.add("is-drag-over");
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "move";
+      }
+      column.querySelector(".ticket-list")?.classList.add("is-drag-over");
     });
 
-    list.addEventListener("dragleave", (event) => {
-      if (!list.contains(event.relatedTarget as Node | null)) {
-        list.classList.remove("is-drag-over");
+    column.addEventListener("dragleave", (event) => {
+      if (!column.contains(event.relatedTarget as Node | null)) {
+        column.querySelector(".ticket-list")?.classList.remove("is-drag-over");
       }
     });
 
-    list.addEventListener("drop", async (event) => {
+    column.addEventListener("drop", async (event) => {
       event.preventDefault();
-      list.classList.remove("is-drag-over");
+      column.querySelector(".ticket-list")?.classList.remove("is-drag-over");
 
       const ticketId = event.dataTransfer?.getData("text/plain") || state.draggingId;
-      const status = list.dataset.status as Status;
+      const status = column.dataset.status as Status;
       const targetCard = (event.target as HTMLElement).closest<HTMLElement>(".ticket-card");
       const beforeId = targetCard?.dataset.ticketId;
 
@@ -594,7 +597,7 @@ function bindEditorEvents() {
   panel?.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
     const modeButton = target.closest<HTMLButtonElement>("[data-mode]");
-    const actionButton = target.closest<HTMLButtonElement>("[data-action]");
+    const actionButton = target.closest<HTMLButtonElement>("button[data-action]");
 
     if (modeButton?.dataset.mode) {
       state.editorMode = modeButton.dataset.mode as EditorMode;
