@@ -227,8 +227,11 @@ select:focus {
 .ghost-button svg,
 .save-button svg,
 .project-icon svg,
+.project-drag-icon svg,
 .column-icon svg,
-.ticket-topline svg {
+.ticket-topline svg,
+.mode-tabs svg,
+.project-context-menu svg {
   width: 18px;
   height: 18px;
   stroke-width: 2;
@@ -273,7 +276,7 @@ select:focus {
 
 .project-item {
   display: grid;
-  grid-template-columns: 28px 1fr;
+  grid-template-columns: 28px minmax(0, 1fr) 18px;
   gap: 10px;
   align-items: center;
   width: 100%;
@@ -285,11 +288,13 @@ select:focus {
   text-align: left;
   transition:
     background 120ms ease,
-    box-shadow 120ms ease;
+    box-shadow 120ms ease,
+    opacity 120ms ease;
 }
 
 .project-item:hover,
-.project-item.active {
+.project-item.active,
+.project-item.is-project-drag-over {
   background: rgba(255, 255, 255, 0.72);
 }
 
@@ -297,6 +302,10 @@ select:focus {
   box-shadow:
     inset 3px 0 0 var(--accent),
     inset 0 0 0 1px rgba(35, 108, 90, 0.16);
+}
+
+.project-item.is-project-dragging {
+  opacity: 0.45;
 }
 
 .project-item span {
@@ -329,6 +338,64 @@ select:focus {
   border-radius: 7px;
   background: rgba(47, 95, 158, 0.1);
   color: var(--blue);
+}
+
+.project-drag-icon {
+  color: #9a958b;
+  opacity: 0.74;
+}
+
+.context-menu-backdrop {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+}
+
+.project-context-menu {
+  position: fixed;
+  z-index: 31;
+  display: grid;
+  width: 208px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  box-shadow: 0 18px 48px rgba(52, 45, 35, 0.18);
+  padding: 5px;
+}
+
+.project-context-menu button {
+  display: grid;
+  min-width: 0;
+  min-height: 36px;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  padding: 0 9px;
+  text-align: left;
+}
+
+.project-context-menu button:hover:not(:disabled) {
+  background: #f1eadf;
+}
+
+.project-context-menu button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.project-context-menu button.danger {
+  color: var(--rose);
+}
+
+.project-context-menu span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workspace {
@@ -647,11 +714,45 @@ select:focus {
 
 .modal-backdrop {
   position: fixed;
+  z-index: 50;
   inset: 0;
   display: grid;
   place-items: center;
   background: rgba(30, 29, 25, 0.42);
   padding: 24px;
+}
+
+.rename-backdrop {
+  position: fixed;
+  z-index: 55;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(30, 29, 25, 0.34);
+  padding: 20px;
+}
+
+.rename-panel {
+  display: grid;
+  width: min(430px, 100%);
+  gap: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  border-radius: 8px;
+  background: var(--paper);
+  box-shadow: var(--shadow);
+  padding: 18px;
+}
+
+.rename-panel h3 {
+  margin: 2px 0 0;
+  font-size: 1.16rem;
+  line-height: 1.2;
+}
+
+.rename-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .editor-panel {

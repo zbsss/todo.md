@@ -21,6 +21,8 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import {
+  ArrowDown,
+  ArrowUp,
   CircleCheck,
   createIcons,
   Folder,
@@ -81,6 +83,8 @@ if (!app) {
 }
 
 const appRoot = app;
+const ticketDragType = "application/x-todo-md-ticket";
+const projectDragType = "application/x-todo-md-project";
 
 const state: {
   workspace: WorkspaceInfo | null;
@@ -89,6 +93,10 @@ const state: {
   selectedTicketId: string | null;
   draft: TicketDraft | null;
   draggingId: string | null;
+  draggingProjectId: string | null;
+  projectMenu: { projectId: string; x: number; y: number } | null;
+  renamingProjectId: string | null;
+  renamingProjectName: string;
   isLoading: boolean;
   error: string | null;
 } = {
@@ -98,6 +106,10 @@ const state: {
   selectedTicketId: null,
   draft: null,
   draggingId: null,
+  draggingProjectId: null,
+  projectMenu: null,
+  renamingProjectId: null,
+  renamingProjectName: "",
   isLoading: true,
   error: null
 };
@@ -198,6 +210,8 @@ function render() {
       </section>
     </div>
 
+    ${renderProjectMenu()}
+    ${renderProjectRenameDialog()}
     ${renderEditor()}
   `;
 
@@ -215,16 +229,106 @@ function renderProjects(projects: ProjectSummary[]) {
       const isActive = project.id === state.selectedProjectId;
 
       return `
-        <button class="project-item ${isActive ? "active" : ""}" data-project-id="${escapeAttr(project.id)}">
+        <button
+          class="project-item ${isActive ? "active" : ""}"
+          data-project-id="${escapeAttr(project.id)}"
+          draggable="true"
+        >
           <span class="project-icon">${icon("folder")}</span>
           <span>
             <strong>${escapeHtml(project.name)}</strong>
             <small>${project.ticketCount} ${project.ticketCount === 1 ? "ticket" : "tickets"}</small>
           </span>
+          <span class="project-drag-icon">${icon("grip-vertical")}</span>
         </button>
       `;
     })
     .join("");
+}
+
+function renderProjectMenu() {
+  if (!state.projectMenu || !state.workspace) {
+    return "";
+  }
+
+  const project = getProject(state.projectMenu.projectId);
+
+  if (!project) {
+    return "";
+  }
+
+  const index = state.workspace.projects.findIndex((candidate) => candidate.id === project.id);
+  const canMoveUp = index > 0;
+  const canMoveDown = index >= 0 && index < state.workspace.projects.length - 1;
+
+  return `
+    <div class="context-menu-backdrop" data-action="close-project-menu"></div>
+    <div
+      class="project-context-menu"
+      role="menu"
+      style="left: ${state.projectMenu.x}px; top: ${state.projectMenu.y}px;"
+      aria-label="${escapeAttr(project.name)} project menu"
+    >
+      <button data-project-action="rename-project" data-project-id="${escapeAttr(project.id)}" role="menuitem">
+        ${icon("pencil")}
+        <span>Rename</span>
+      </button>
+      <button
+        data-project-action="move-project-up"
+        data-project-id="${escapeAttr(project.id)}"
+        role="menuitem"
+        ${canMoveUp ? "" : "disabled"}
+      >
+        ${icon("arrow-up")}
+        <span>Move up</span>
+      </button>
+      <button
+        data-project-action="move-project-down"
+        data-project-id="${escapeAttr(project.id)}"
+        role="menuitem"
+        ${canMoveDown ? "" : "disabled"}
+      >
+        ${icon("arrow-down")}
+        <span>Move down</span>
+      </button>
+      <button
+        class="danger"
+        data-project-action="remove-project"
+        data-project-id="${escapeAttr(project.id)}"
+        role="menuitem"
+      >
+        ${icon("trash-2")}
+        <span>Remove</span>
+      </button>
+    </div>
+  `;
+}
+
+function renderProjectRenameDialog() {
+  const project = state.renamingProjectId ? getProject(state.renamingProjectId) : null;
+
+  if (!project) {
+    return "";
+  }
+
+  return `
+    <div class="rename-backdrop">
+      <form class="rename-panel" data-action="save-project-name" role="dialog" aria-modal="true" aria-labelledby="rename-title">
+        <header>
+          <p class="eyebrow">Project</p>
+          <h3 id="rename-title">Rename project</h3>
+        </header>
+        <input name="name" value="${escapeAttr(state.renamingProjectName)}" autocomplete="off" />
+        <footer class="rename-actions">
+          <button type="button" class="ghost-button" data-action="cancel-project-rename">Cancel</button>
+          <button class="save-button">
+            ${icon("save")}
+            <span>Save</span>
+          </button>
+        </footer>
+      </form>
+    </div>
+  `;
 }
 
 function renderBoard() {
@@ -399,7 +503,6 @@ function bindProjectEvents() {
       try {
         const project = await api.createProject(name);
         state.workspace?.projects.push(project);
-        state.workspace?.projects.sort((a, b) => a.name.localeCompare(b.name));
         state.selectedProjectId = project.id;
         state.tickets = [];
         input.value = "";
@@ -436,7 +539,56 @@ function bindProjectEvents() {
     }
   });
 
-  document.querySelectorAll<HTMLButtonElement>("[data-project-id]").forEach((button) => {
+  document.querySelector<HTMLElement>('[data-action="close-project-menu"]')?.addEventListener("click", () => {
+    closeProjectMenu();
+  });
+
+  document.querySelector<HTMLFormElement>('[data-action="save-project-name"]')?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement | null;
+    const input = form?.elements.namedItem("name") as HTMLInputElement | null;
+
+    if (input) {
+      void saveProjectName(input.value);
+    }
+  });
+
+  document.querySelector<HTMLButtonElement>('[data-action="cancel-project-rename"]')?.addEventListener("click", () => {
+    closeProjectRenameDialog();
+  });
+
+  document.querySelector<HTMLInputElement>('.rename-panel input[name="name"]')?.addEventListener("input", (event) => {
+    state.renamingProjectName = (event.currentTarget as HTMLInputElement).value;
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-project-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const projectId = button.dataset.projectId;
+      const action = button.dataset.projectAction;
+
+      if (!projectId || !action) {
+        return;
+      }
+
+      if (action === "rename-project") {
+        openProjectRenameDialog(projectId);
+      }
+
+      if (action === "move-project-up") {
+        void moveProjectBy(projectId, -1);
+      }
+
+      if (action === "move-project-down") {
+        void moveProjectBy(projectId, 1);
+      }
+
+      if (action === "remove-project") {
+        void removeProject(projectId);
+      }
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>(".project-item[data-project-id]").forEach((button) => {
     button.addEventListener("click", async () => {
       const projectId = button.dataset.projectId;
 
@@ -462,6 +614,87 @@ function bindProjectEvents() {
         render();
       }
     });
+
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      const projectId = button.dataset.projectId;
+
+      if (projectId) {
+        openProjectMenu(projectId, event.clientX, event.clientY);
+      }
+    });
+
+    button.addEventListener("dragstart", (event) => {
+      const projectId = button.dataset.projectId;
+
+      if (!projectId || !event.dataTransfer) {
+        return;
+      }
+
+      state.draggingProjectId = projectId;
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData(projectDragType, projectId);
+      button.classList.add("is-project-dragging");
+      closeProjectMenu({ shouldRender: false });
+    });
+
+    button.addEventListener("dragover", (event) => {
+      if (!state.draggingProjectId || state.draggingProjectId === button.dataset.projectId) {
+        return;
+      }
+
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "move";
+      }
+      button.classList.add("is-project-drag-over");
+    });
+
+    button.addEventListener("dragleave", () => {
+      button.classList.remove("is-project-drag-over");
+    });
+
+    button.addEventListener("drop", async (event) => {
+      event.preventDefault();
+      button.classList.remove("is-project-drag-over");
+
+      const projectId = event.dataTransfer?.getData(projectDragType) || state.draggingProjectId;
+      const beforeId = button.dataset.projectId;
+
+      if (!projectId || !beforeId || projectId === beforeId) {
+        return;
+      }
+
+      await reorderProjectBefore(projectId, beforeId);
+    });
+
+    button.addEventListener("dragend", () => {
+      state.draggingProjectId = null;
+      document
+        .querySelectorAll(".is-project-dragging, .is-project-drag-over")
+        .forEach((node) => node.classList.remove("is-project-dragging", "is-project-drag-over"));
+    });
+  });
+
+  document.querySelector<HTMLElement>(".project-list")?.addEventListener("dragover", (event) => {
+    if (state.draggingProjectId) {
+      event.preventDefault();
+    }
+  });
+
+  document.querySelector<HTMLElement>(".project-list")?.addEventListener("drop", async (event) => {
+    const targetProject = (event.target as HTMLElement).closest<HTMLElement>(".project-item");
+
+    if (targetProject) {
+      return;
+    }
+
+    event.preventDefault();
+    const projectId = event.dataTransfer?.getData(projectDragType) || state.draggingProjectId;
+
+    if (projectId) {
+      await reorderProjectBefore(projectId);
+    }
   });
 
   document.querySelector<HTMLButtonElement>('[data-action="refresh"]')?.addEventListener("click", async () => {
@@ -480,6 +713,188 @@ function bindProjectEvents() {
       render();
     }
   });
+}
+
+function openProjectMenu(projectId: string, x: number, y: number) {
+  const menuWidth = 208;
+  const menuHeight = 178;
+
+  state.projectMenu = {
+    projectId,
+    x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
+    y: Math.max(8, Math.min(y, window.innerHeight - menuHeight - 8))
+  };
+  render();
+}
+
+function closeProjectMenu(options: { shouldRender?: boolean } = {}) {
+  state.projectMenu = null;
+
+  if (options.shouldRender !== false) {
+    render();
+  }
+}
+
+function openProjectRenameDialog(projectId: string) {
+  const project = getProject(projectId);
+
+  if (!project) {
+    closeProjectMenu();
+    return;
+  }
+
+  state.projectMenu = null;
+  state.renamingProjectId = project.id;
+  state.renamingProjectName = project.name;
+  render();
+  document.querySelector<HTMLInputElement>('.rename-panel input[name="name"]')?.select();
+}
+
+function closeProjectRenameDialog() {
+  state.renamingProjectId = null;
+  state.renamingProjectName = "";
+  render();
+}
+
+async function saveProjectName(name: string) {
+  const projectId = state.renamingProjectId;
+  const nextName = name.trim();
+
+  if (!projectId) {
+    return;
+  }
+
+  if (!nextName) {
+    document.querySelector<HTMLInputElement>('.rename-panel input[name="name"]')?.focus();
+    return;
+  }
+
+  try {
+    const updated = await api.updateProjectName(projectId, nextName);
+    state.workspace = updateProjectInWorkspace(state.workspace, updated);
+    state.renamingProjectId = null;
+    state.renamingProjectName = "";
+    render();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function removeProject(projectId: string) {
+  const project = getProject(projectId);
+
+  if (!project) {
+    closeProjectMenu();
+    return;
+  }
+
+  if (state.selectedProjectId === projectId && !(await confirmDiscardDraft())) {
+    return;
+  }
+
+  const confirmed = await confirmAction(
+    `Remove "${project.name}" from the project list? Its Markdown files and .tasks folder will stay on disk.`,
+    "Remove project"
+  );
+
+  if (!confirmed) {
+    return;
+  }
+
+  const nextProjectId = findNeighborProjectId(projectId);
+
+  try {
+    const workspace = await api.removeProject(projectId);
+    state.workspace = workspace;
+    state.projectMenu = null;
+    state.renamingProjectId = null;
+
+    if (state.selectedProjectId === projectId) {
+      state.selectedProjectId =
+        (nextProjectId && workspace.projects.some((candidate) => candidate.id === nextProjectId)
+          ? nextProjectId
+          : workspace.projects[0]?.id) ?? null;
+      state.selectedTicketId = null;
+      state.draft = null;
+      state.tickets = [];
+
+      if (state.selectedProjectId) {
+        state.isLoading = true;
+        render();
+        await loadTickets(state.selectedProjectId);
+      }
+    }
+
+    state.isLoading = false;
+    render();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function moveProjectBy(projectId: string, delta: -1 | 1) {
+  if (!state.workspace) {
+    return;
+  }
+
+  const fromIndex = state.workspace.projects.findIndex((project) => project.id === projectId);
+  const toIndex = fromIndex + delta;
+
+  if (fromIndex < 0 || toIndex < 0 || toIndex >= state.workspace.projects.length) {
+    closeProjectMenu();
+    return;
+  }
+
+  const nextProjects = [...state.workspace.projects];
+  const [project] = nextProjects.splice(fromIndex, 1);
+  nextProjects.splice(toIndex, 0, project);
+  await saveProjectOrder(nextProjects);
+}
+
+async function reorderProjectBefore(projectId: string, beforeId?: string) {
+  if (!state.workspace || projectId === beforeId) {
+    return;
+  }
+
+  const project = state.workspace.projects.find((candidate) => candidate.id === projectId);
+
+  if (!project) {
+    return;
+  }
+
+  const nextProjects = state.workspace.projects.filter((candidate) => candidate.id !== projectId);
+  const beforeIndex = beforeId ? nextProjects.findIndex((candidate) => candidate.id === beforeId) : -1;
+
+  if (beforeIndex >= 0) {
+    nextProjects.splice(beforeIndex, 0, project);
+  } else {
+    nextProjects.push(project);
+  }
+
+  await saveProjectOrder(nextProjects);
+}
+
+async function saveProjectOrder(projects: ProjectSummary[]) {
+  const previousWorkspace = state.workspace;
+
+  if (!previousWorkspace) {
+    return;
+  }
+
+  state.workspace = {
+    ...previousWorkspace,
+    projects
+  };
+  state.projectMenu = null;
+  render();
+
+  try {
+    state.workspace = await api.reorderProjects(projects.map((project) => project.id));
+    render();
+  } catch (error) {
+    state.workspace = previousWorkspace;
+    showError(error);
+  }
 }
 
 function bindTicketEvents() {
@@ -543,7 +958,7 @@ function bindTicketEvents() {
 
       state.draggingId = ticketId;
       event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("text/plain", ticketId);
+      event.dataTransfer.setData(ticketDragType, ticketId);
       card.classList.add("is-dragging");
     });
 
@@ -557,6 +972,10 @@ function bindTicketEvents() {
 
   document.querySelectorAll<HTMLElement>(".column").forEach((column) => {
     column.addEventListener("dragover", (event) => {
+      if (!state.draggingId) {
+        return;
+      }
+
       event.preventDefault();
       if (event.dataTransfer) {
         event.dataTransfer.dropEffect = "move";
@@ -574,7 +993,7 @@ function bindTicketEvents() {
       event.preventDefault();
       column.querySelector(".ticket-list")?.classList.remove("is-drag-over");
 
-      const ticketId = event.dataTransfer?.getData("text/plain") || state.draggingId;
+      const ticketId = event.dataTransfer?.getData(ticketDragType) || state.draggingId;
       const status = column.dataset.status as Status;
       const targetCard = (event.target as HTMLElement).closest<HTMLElement>(".ticket-card");
       const beforeId = targetCard?.dataset.ticketId;
@@ -643,6 +1062,16 @@ function bindEditorEvents() {
 
 function bindGlobalKeys() {
   window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.renamingProjectId) {
+      closeProjectRenameDialog();
+      return;
+    }
+
+    if (event.key === "Escape" && state.projectMenu) {
+      closeProjectMenu();
+      return;
+    }
+
     if (event.key === "Escape" && state.draft) {
       void requestCloseEditor();
     }
@@ -827,6 +1256,32 @@ function renumberTickets(tickets: Ticket[]) {
 
 function getSelectedTicket() {
   return state.tickets.find((ticket) => ticket.id === state.selectedTicketId) ?? null;
+}
+
+function getProject(projectId: string) {
+  return state.workspace?.projects.find((project) => project.id === projectId) ?? null;
+}
+
+function findNeighborProjectId(projectId: string) {
+  const projects = state.workspace?.projects ?? [];
+  const index = projects.findIndex((project) => project.id === projectId);
+
+  if (index < 0) {
+    return null;
+  }
+
+  return projects[index + 1]?.id ?? projects[index - 1]?.id ?? null;
+}
+
+function updateProjectInWorkspace(workspace: WorkspaceInfo | null, updated: ProjectSummary) {
+  if (!workspace) {
+    return workspace;
+  }
+
+  return {
+    ...workspace,
+    projects: workspace.projects.map((project) => (project.id === updated.id ? updated : project))
+  };
 }
 
 function ticketsFor(status: Status) {
@@ -1295,6 +1750,8 @@ function icon(name: string) {
 function hydrateIcons() {
   createIcons({
     icons: {
+      ArrowDown,
+      ArrowUp,
       CircleCheck,
       Folder,
       FolderPlus,
@@ -1361,6 +1818,27 @@ const api = {
     }
 
     return mockStore.importProject(path);
+  },
+  async updateProjectName(projectId: string, name: string) {
+    if (isTauriRuntime) {
+      return invoke<ProjectSummary>("update_project_name", { projectId, name });
+    }
+
+    return mockStore.updateProjectName(projectId, name);
+  },
+  async removeProject(projectId: string) {
+    if (isTauriRuntime) {
+      return invoke<WorkspaceInfo>("remove_project", { projectId });
+    }
+
+    return mockStore.removeProject(projectId);
+  },
+  async reorderProjects(projectIds: string[]) {
+    if (isTauriRuntime) {
+      return invoke<WorkspaceInfo>("reorder_projects", { projectIds });
+    }
+
+    return mockStore.reorderProjects(projectIds);
   },
   async listTickets(projectId: string) {
     if (isTauriRuntime) {
@@ -1513,6 +1991,49 @@ const mockStore = (() => {
       write(store);
 
       return project;
+    },
+    async updateProjectName(projectId: string, name: string) {
+      const store = read();
+      let updated: ProjectSummary | null = null;
+
+      store.workspace.projects = store.workspace.projects.map((project) => {
+        if (project.id !== projectId) {
+          return project;
+        }
+
+        updated = {
+          ...project,
+          name
+        };
+        return updated;
+      });
+      write(store);
+
+      if (!updated) {
+        throw new Error("Project not found.");
+      }
+
+      return updated;
+    },
+    async removeProject(projectId: string) {
+      const store = read();
+
+      store.workspace.projects = store.workspace.projects.filter((project) => project.id !== projectId);
+      write(store);
+
+      return store.workspace;
+    },
+    async reorderProjects(projectIds: string[]) {
+      const store = read();
+      const requested = new Set(projectIds);
+      const byId = new Map(store.workspace.projects.map((project) => [project.id, project]));
+      const ordered = projectIds.map((id) => byId.get(id)).filter((project): project is ProjectSummary => Boolean(project));
+      const remaining = store.workspace.projects.filter((project) => !requested.has(project.id));
+
+      store.workspace.projects = [...ordered, ...remaining];
+      write(store);
+
+      return store.workspace;
     },
     async listTickets(projectId: string) {
       return read().tickets[projectId] ?? [];
