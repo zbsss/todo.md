@@ -406,10 +406,6 @@ function renderColumn(column: { id: Status; label: string; icon: string }) {
 
 function renderTicketCard(ticket: Ticket) {
   const renderedBody = renderMarkdown(ticket.body, { compact: true });
-  const columnTickets = ticketsFor(ticket.status);
-  const columnIndex = columnTickets.findIndex((candidate) => candidate.id === ticket.id);
-  const canMoveUp = columnIndex > 0;
-  const canMoveDown = columnIndex > -1 && columnIndex < columnTickets.length - 1;
 
   return `
     <article
@@ -418,30 +414,11 @@ function renderTicketCard(ticket: Ticket) {
       data-ticket-id="${escapeAttr(ticket.id)}"
       tabindex="0"
       aria-label="${escapeAttr(ticket.title)}"
+      aria-keyshortcuts="Enter ArrowUp ArrowDown"
     >
       <div class="ticket-topline">
         <h4>${escapeHtml(ticket.title)}</h4>
-        <div class="ticket-actions">
-          <button
-            class="ticket-move-button"
-            data-ticket-action="move-up"
-            aria-label="Move ${escapeAttr(ticket.title)} up"
-            title="Move up"
-            ${canMoveUp ? "" : "disabled"}
-          >
-            ${icon("arrow-up")}
-          </button>
-          <button
-            class="ticket-move-button"
-            data-ticket-action="move-down"
-            aria-label="Move ${escapeAttr(ticket.title)} down"
-            title="Move down"
-            ${canMoveDown ? "" : "disabled"}
-          >
-            ${icon("arrow-down")}
-          </button>
-          <span class="drag-handle" title="Drag to reorder">${icon("grip-vertical")}</span>
-        </div>
+        <span class="drag-handle" title="Drag to reorder">${icon("grip-vertical")}</span>
       </div>
       ${renderedBody ? `<div class="markdown card-markdown">${renderedBody}</div>` : ""}
     </article>
@@ -999,15 +976,8 @@ function bindTicketEvents() {
     });
 
   document.querySelectorAll<HTMLElement>(".ticket-card").forEach((card) => {
-    card.addEventListener("click", (event) => {
-      const actionButton = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-ticket-action]");
+    card.addEventListener("click", () => {
       const ticketId = card.dataset.ticketId;
-
-      if (actionButton?.dataset.ticketAction && ticketId) {
-        event.stopPropagation();
-        void moveTicketWithinColumn(ticketId, actionButton.dataset.ticketAction as MoveDirection);
-        return;
-      }
 
       if (ticketId) {
         openEditor(ticketId);
@@ -1024,6 +994,15 @@ function bindTicketEvents() {
 
         if (ticketId) {
           openEditor(ticketId);
+        }
+      }
+
+      if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        const ticketId = card.dataset.ticketId;
+
+        if (ticketId) {
+          event.preventDefault();
+          void moveFocusedTicket(ticketId, event.key === "ArrowUp" ? "up" : "down");
         }
       }
     });
@@ -1303,9 +1282,9 @@ async function moveTicket(ticketId: string, status: Status, beforeId?: string) {
   }
 }
 
-type MoveDirection = "move-up" | "move-down";
+type KeyboardMoveDirection = "up" | "down";
 
-async function moveTicketWithinColumn(ticketId: string, direction: MoveDirection) {
+async function moveFocusedTicket(ticketId: string, direction: KeyboardMoveDirection) {
   const ticket = state.tickets.find((candidate) => candidate.id === ticketId);
 
   if (!ticket) {
@@ -1319,17 +1298,15 @@ async function moveTicketWithinColumn(ticketId: string, direction: MoveDirection
     return;
   }
 
-  const beforeId =
-    direction === "move-up" ? columnTickets[index - 1]?.id : columnTickets[index + 2]?.id;
-
-  if (direction === "move-up" && !beforeId) {
+  if (direction === "up" && index === 0) {
     return;
   }
 
-  if (direction === "move-down" && index >= columnTickets.length - 1) {
+  if (direction === "down" && index >= columnTickets.length - 1) {
     return;
   }
 
+  const beforeId = direction === "up" ? columnTickets[index - 1]?.id : columnTickets[index + 2]?.id;
   await moveTicket(ticketId, ticket.status, beforeId);
   focusTicket(ticketId);
 }
