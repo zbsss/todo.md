@@ -1513,11 +1513,7 @@ async function bindWindowCloseGuards() {
       try {
         await Promise.race([saveDraft({ flush: true }), wait(closeAutosaveTimeoutMs)]);
       } finally {
-        try {
-          await appWindow.destroy();
-        } catch {
-          await appWindow.close();
-        }
+        await appWindow.destroy();
       }
     });
   } else {
