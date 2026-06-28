@@ -166,6 +166,7 @@ let markdownEditorView: EditorView | null = null;
 const pendingImageUploads = new Set<Promise<void>>();
 const draftAutosaveDelayMs = 700;
 const draftAutosaveRetryDelayMs = 5000;
+const closeAutosaveTimeoutMs = 2000;
 let draftAutosaveTimer: ReturnType<typeof window.setTimeout> | null = null;
 let draftSavePromise: Promise<void> | null = null;
 let draftSaveRunId = 0;
@@ -1502,15 +1503,21 @@ async function bindWindowCloseGuards() {
     const appWindow = getCurrentWindow();
 
     await appWindow.onCloseRequested(async (event) => {
-      if (isClosingWindow || !state.draft) {
+      if (isClosingWindow || !state.draft || !hasUnsavedDraft()) {
         return;
       }
 
       event.preventDefault();
+      isClosingWindow = true;
 
-      if (await saveDraft({ flush: true })) {
-        isClosingWindow = true;
-        await appWindow.destroy();
+      try {
+        await Promise.race([saveDraft({ flush: true }), wait(closeAutosaveTimeoutMs)]);
+      } finally {
+        try {
+          await appWindow.destroy();
+        } catch {
+          await appWindow.close();
+        }
       }
     });
   } else {
@@ -1533,6 +1540,12 @@ async function bindWindowCloseGuards() {
     if (state.draft && !persistMockDraftSync()) {
       void saveDraft({ flush: true });
     }
+  });
+}
+
+function wait(ms: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms);
   });
 }
 
