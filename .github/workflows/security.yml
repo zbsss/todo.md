@@ -111,35 +111,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Install Tauri Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y \
-            build-essential \
-            curl \
-            file \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libssl-dev \
-            libwebkit2gtk-4.1-dev \
-            libxdo-dev \
-            patchelf \
-            wget
-
-      - name: Set up Rust
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
           languages: rust
-          build-mode: manual
+          build-mode: none
           queries: security-extended,security-and-quality
-
-      - name: Build for CodeQL
-        run: cargo check --manifest-path src-tauri/Cargo.toml --locked --all-features
 
       - name: Analyze
         uses: github/codeql-action/analyze@v4
