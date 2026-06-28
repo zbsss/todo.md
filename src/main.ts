@@ -24,12 +24,14 @@ import {
   ArrowDown,
   ArrowUp,
   CircleCheck,
+  Copy,
   createIcons,
   Folder,
   FolderPlus,
   GripVertical,
   ListTodo,
   LoaderCircle,
+  Pencil,
   Plus,
   RefreshCw,
   Save,
@@ -272,6 +274,10 @@ function renderProjectMenu() {
       <button data-project-action="rename-project" data-project-id="${escapeAttr(project.id)}" role="menuitem">
         ${icon("pencil")}
         <span>Rename</span>
+      </button>
+      <button data-project-action="copy-project-path" data-project-id="${escapeAttr(project.id)}" role="menuitem">
+        ${icon("copy")}
+        <span>Copy path</span>
       </button>
       <button
         data-project-action="move-project-up"
@@ -574,6 +580,10 @@ function bindProjectEvents() {
         openProjectRenameDialog(projectId);
       }
 
+      if (action === "copy-project-path") {
+        void copyProjectPath(projectId);
+      }
+
       if (action === "move-project-up") {
         void moveProjectBy(projectId, -1);
       }
@@ -775,6 +785,22 @@ async function saveProjectName(name: string) {
     state.renamingProjectId = null;
     state.renamingProjectName = "";
     render();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function copyProjectPath(projectId: string) {
+  const project = getProject(projectId);
+
+  if (!project) {
+    closeProjectMenu();
+    return;
+  }
+
+  try {
+    await copyText(project.path);
+    closeProjectMenu();
   } catch (error) {
     showError(error);
   }
@@ -1753,11 +1779,13 @@ function hydrateIcons() {
       ArrowDown,
       ArrowUp,
       CircleCheck,
+      Copy,
       Folder,
       FolderPlus,
       GripVertical,
       ListTodo,
       LoaderCircle,
+      Pencil,
       Plus,
       RefreshCw,
       Save,
@@ -1789,6 +1817,28 @@ function shortPath(path: string) {
   }
 
   return `.../${parts.slice(-3).join("/")}`;
+}
+
+async function copyText(value: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+
+  try {
+    if (!document.execCommand("copy")) {
+      throw new Error("Could not copy project path.");
+    }
+  } finally {
+    textarea.remove();
+  }
 }
 
 function showError(error: unknown) {
