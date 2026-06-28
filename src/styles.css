@@ -230,7 +230,7 @@ select:focus {
 .project-drag-icon svg,
 .column-icon svg,
 .ticket-topline svg,
-.project-context-menu svg {
+.context-menu svg {
   width: 18px;
   height: 18px;
   stroke-width: 2;
@@ -350,7 +350,7 @@ select:focus {
   inset: 0;
 }
 
-.project-context-menu {
+.context-menu {
   position: fixed;
   z-index: 31;
   display: grid;
@@ -363,7 +363,7 @@ select:focus {
   padding: 5px;
 }
 
-.project-context-menu button {
+.context-menu button {
   display: grid;
   min-width: 0;
   min-height: 36px;
@@ -378,20 +378,20 @@ select:focus {
   text-align: left;
 }
 
-.project-context-menu button:hover:not(:disabled) {
+.context-menu button:hover:not(:disabled) {
   background: #f1eadf;
 }
 
-.project-context-menu button:disabled {
+.context-menu button:disabled {
   cursor: default;
   opacity: 0.42;
 }
 
-.project-context-menu button.danger {
+.context-menu button.danger {
   color: var(--rose);
 }
 
-.project-context-menu span {
+.context-menu span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

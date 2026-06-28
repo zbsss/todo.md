@@ -73,6 +73,20 @@ type TicketDraft = {
   status: Status;
 };
 
+type RenderOptions = {
+  preserveScroll?: boolean;
+};
+
+type ScrollSnapshot = {
+  windowX: number;
+  windowY: number;
+  elements: Array<{
+    key: string;
+    scrollLeft: number;
+    scrollTop: number;
+  }>;
+};
+
 const columns: Array<{ id: Status; label: string; icon: string }> = [
   { id: "todo", label: "To do", icon: "list-todo" },
   { id: "doing", label: "Doing", icon: "loader-circle" },
@@ -98,6 +112,7 @@ const state: {
   draggingId: string | null;
   draggingProjectId: string | null;
   projectMenu: { projectId: string; x: number; y: number } | null;
+  ticketMenu: { ticketId: string; x: number; y: number } | null;
   renamingProjectId: string | null;
   renamingProjectName: string;
   isLoading: boolean;
@@ -111,6 +126,7 @@ const state: {
   draggingId: null,
   draggingProjectId: null,
   projectMenu: null,
+  ticketMenu: null,
   renamingProjectId: null,
   renamingProjectName: "",
   isLoading: true,
@@ -159,7 +175,9 @@ async function loadTickets(projectId: string) {
   state.tickets.sort(sortTickets);
 }
 
-function render() {
+function render(options: RenderOptions = {}) {
+  const scrollSnapshot = options.preserveScroll ? captureScrollSnapshot() : null;
+
   destroyMarkdownEditor();
 
   const workspace = state.workspace;
@@ -214,12 +232,14 @@ function render() {
     </div>
 
     ${renderProjectMenu()}
+    ${renderTicketMenu()}
     ${renderProjectRenameDialog()}
     ${renderEditor()}
   `;
 
   hydrateIcons();
   bindEvents();
+  restoreScrollSnapshot(scrollSnapshot);
 }
 
 function renderProjects(projects: ProjectSummary[]) {
@@ -267,7 +287,7 @@ function renderProjectMenu() {
   return `
     <div class="context-menu-backdrop" data-action="close-project-menu"></div>
     <div
-      class="project-context-menu"
+      class="context-menu project-context-menu"
       role="menu"
       style="left: ${state.projectMenu.x}px; top: ${state.projectMenu.y}px;"
       aria-label="${escapeAttr(project.name)} project menu"
@@ -310,6 +330,42 @@ function renderProjectMenu() {
       >
         ${icon("trash-2")}
         <span>Remove</span>
+      </button>
+    </div>
+  `;
+}
+
+function renderTicketMenu() {
+  if (!state.ticketMenu) {
+    return "";
+  }
+
+  const ticket = getTicket(state.ticketMenu.ticketId);
+
+  if (!ticket) {
+    return "";
+  }
+
+  return `
+    <div class="context-menu-backdrop" data-action="close-ticket-menu"></div>
+    <div
+      class="context-menu ticket-context-menu"
+      role="menu"
+      style="left: ${state.ticketMenu.x}px; top: ${state.ticketMenu.y}px;"
+      aria-label="${escapeAttr(ticket.title)} task menu"
+    >
+      <button data-ticket-action="copy-ticket-path" data-ticket-id="${escapeAttr(ticket.id)}" role="menuitem">
+        ${icon("copy")}
+        <span>Copy path</span>
+      </button>
+      <button
+        class="danger"
+        data-ticket-action="delete-ticket"
+        data-ticket-id="${escapeAttr(ticket.id)}"
+        role="menuitem"
+      >
+        ${icon("trash-2")}
+        <span>Delete</span>
       </button>
     </div>
   `;
@@ -739,19 +795,50 @@ function openProjectMenu(projectId: string, x: number, y: number) {
   const menuWidth = 208;
   const menuHeight = 250;
 
+  state.ticketMenu = null;
   state.projectMenu = {
     projectId,
     x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
     y: Math.max(8, Math.min(y, window.innerHeight - menuHeight - 8))
   };
-  render();
+  render({ preserveScroll: true });
 }
 
 function closeProjectMenu(options: { shouldRender?: boolean } = {}) {
   state.projectMenu = null;
 
   if (options.shouldRender !== false) {
-    render();
+    render({ preserveScroll: true });
+  }
+}
+
+function openTicketMenu(ticketId: string, x: number, y: number) {
+  const menuWidth = 208;
+  const menuHeight = 92;
+
+  state.projectMenu = null;
+  state.ticketMenu = {
+    ticketId,
+    x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
+    y: Math.max(8, Math.min(y, window.innerHeight - menuHeight - 8))
+  };
+  render({ preserveScroll: true });
+}
+
+function closeTicketMenu(options: { shouldRender?: boolean } = {}) {
+  state.ticketMenu = null;
+
+  if (options.shouldRender !== false) {
+    render({ preserveScroll: true });
+  }
+}
+
+function closeContextMenus(options: { shouldRender?: boolean } = {}) {
+  state.projectMenu = null;
+  state.ticketMenu = null;
+
+  if (options.shouldRender !== false) {
+    render({ preserveScroll: true });
   }
 }
 
@@ -811,6 +898,22 @@ async function copyProjectPath(projectId: string) {
   try {
     await copyText(project.path);
     closeProjectMenu();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function copyTicketPath(ticketId: string) {
+  const ticket = getTicket(ticketId);
+
+  if (!ticket) {
+    closeTicketMenu();
+    return;
+  }
+
+  try {
+    await copyText(ticket.filePath);
+    closeTicketMenu();
   } catch (error) {
     showError(error);
   }
@@ -975,12 +1078,44 @@ function bindTicketEvents() {
       });
     });
 
+  document.querySelector<HTMLElement>('[data-action="close-ticket-menu"]')?.addEventListener("click", () => {
+    closeTicketMenu();
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-ticket-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const ticketId = button.dataset.ticketId;
+      const action = button.dataset.ticketAction;
+
+      if (!ticketId || !action) {
+        return;
+      }
+
+      if (action === "copy-ticket-path") {
+        void copyTicketPath(ticketId);
+      }
+
+      if (action === "delete-ticket") {
+        void deleteTicket(ticketId);
+      }
+    });
+  });
+
   document.querySelectorAll<HTMLElement>(".ticket-card").forEach((card) => {
     card.addEventListener("click", () => {
       const ticketId = card.dataset.ticketId;
 
       if (ticketId) {
         openEditor(ticketId);
+      }
+    });
+
+    card.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      const ticketId = card.dataset.ticketId;
+
+      if (ticketId) {
+        openTicketMenu(ticketId, event.clientX, event.clientY);
       }
     });
 
@@ -1018,6 +1153,7 @@ function bindTicketEvents() {
       event.dataTransfer.effectAllowed = "move";
       event.dataTransfer.setData(ticketDragType, ticketId);
       card.classList.add("is-dragging");
+      closeTicketMenu({ shouldRender: false });
     });
 
     card.addEventListener("dragend", () => {
@@ -1135,8 +1271,8 @@ function bindGlobalKeys() {
       return;
     }
 
-    if (event.key === "Escape" && state.projectMenu) {
-      closeProjectMenu();
+    if (event.key === "Escape" && (state.projectMenu || state.ticketMenu)) {
+      closeContextMenus();
       return;
     }
 
@@ -1233,11 +1369,19 @@ async function saveDraft() {
 }
 
 async function deleteSelectedTicket() {
-  if (!state.selectedProjectId || !state.selectedTicketId) {
+  if (!state.selectedTicketId) {
     return;
   }
 
-  const ticket = getSelectedTicket();
+  await deleteTicket(state.selectedTicketId);
+}
+
+async function deleteTicket(ticketId: string) {
+  if (!state.selectedProjectId) {
+    return;
+  }
+
+  const ticket = getTicket(ticketId);
 
   if (!ticket || !(await confirmAction(`Delete "${ticket.title}"?`, "Delete ticket"))) {
     return;
@@ -1247,7 +1391,14 @@ async function deleteSelectedTicket() {
     await api.deleteTicket(state.selectedProjectId, ticket.id);
     state.tickets = state.tickets.filter((candidate) => candidate.id !== ticket.id);
     state.workspace = updateTicketCount(state.workspace, state.selectedProjectId, -1);
-    closeEditor();
+    state.ticketMenu = null;
+
+    if (state.selectedTicketId === ticket.id) {
+      state.selectedTicketId = null;
+      state.draft = null;
+    }
+
+    render();
   } catch (error) {
     showError(error);
   }
@@ -1374,6 +1525,95 @@ function focusTicket(ticketId: string) {
   findTicketCard(ticketId)?.focus();
 }
 
+function captureScrollSnapshot(): ScrollSnapshot {
+  return {
+    windowX: window.scrollX,
+    windowY: window.scrollY,
+    elements: Array.from(
+      document.querySelectorAll<HTMLElement>(".project-list, .workspace, .board, .ticket-list[data-status]")
+    ).flatMap((element) => {
+      const key = scrollSnapshotKey(element);
+
+      if (!key) {
+        return [];
+      }
+
+      return [
+        {
+          key,
+          scrollLeft: element.scrollLeft,
+          scrollTop: element.scrollTop
+        }
+      ];
+    })
+  };
+}
+
+function restoreScrollSnapshot(snapshot: ScrollSnapshot | null) {
+  if (!snapshot) {
+    return;
+  }
+
+  snapshot.elements.forEach((position) => {
+    const element = scrollSnapshotElement(position.key);
+
+    if (!element) {
+      return;
+    }
+
+    element.scrollLeft = position.scrollLeft;
+    element.scrollTop = Math.min(position.scrollTop, Math.max(0, element.scrollHeight - element.clientHeight));
+  });
+
+  window.scrollTo(snapshot.windowX, snapshot.windowY);
+}
+
+function scrollSnapshotKey(element: HTMLElement) {
+  if (element.classList.contains("ticket-list") && element.dataset.status) {
+    return `ticket-list:${element.dataset.status}`;
+  }
+
+  if (element.classList.contains("project-list")) {
+    return "project-list";
+  }
+
+  if (element.classList.contains("workspace")) {
+    return "workspace";
+  }
+
+  if (element.classList.contains("board")) {
+    return "board";
+  }
+
+  return null;
+}
+
+function scrollSnapshotElement(key: string) {
+  if (key.startsWith("ticket-list:")) {
+    const status = key.slice("ticket-list:".length);
+
+    return (
+      Array.from(document.querySelectorAll<HTMLElement>(".ticket-list[data-status]")).find(
+        (element) => element.dataset.status === status
+      ) ?? null
+    );
+  }
+
+  if (key === "project-list") {
+    return document.querySelector<HTMLElement>(".project-list");
+  }
+
+  if (key === "workspace") {
+    return document.querySelector<HTMLElement>(".workspace");
+  }
+
+  if (key === "board") {
+    return document.querySelector<HTMLElement>(".board");
+  }
+
+  return null;
+}
+
 function renumberTickets(tickets: Ticket[]) {
   const nextPositions: Array<{ id: string; status: Status; order: number }> = [];
 
@@ -1394,7 +1634,11 @@ function renumberTickets(tickets: Ticket[]) {
 }
 
 function getSelectedTicket() {
-  return state.tickets.find((ticket) => ticket.id === state.selectedTicketId) ?? null;
+  return state.selectedTicketId ? getTicket(state.selectedTicketId) : null;
+}
+
+function getTicket(ticketId: string) {
+  return state.tickets.find((ticket) => ticket.id === ticketId) ?? null;
 }
 
 function getProject(projectId: string) {
@@ -1935,8 +2179,12 @@ function shortPath(path: string) {
 
 async function copyText(value: string) {
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(value);
-    return;
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Some browser shells expose navigator.clipboard but deny writes.
+    }
   }
 
   const textarea = document.createElement("textarea");
@@ -1948,7 +2196,7 @@ async function copyText(value: string) {
 
   try {
     if (!document.execCommand("copy")) {
-      throw new Error("Could not copy project path.");
+      throw new Error("Could not copy path.");
     }
   } finally {
     textarea.remove();
