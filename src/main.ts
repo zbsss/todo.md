@@ -150,6 +150,22 @@ const state: {
 const isTauriRuntime = "__TAURI_INTERNALS__" in window;
 let markdownEditorView: EditorView | null = null;
 const pendingImageUploads = new Set<Promise<void>>();
+const ticketAutoScrollEdge = 72;
+const ticketAutoScrollMaxSpeed = 360;
+const ticketAutoScroll: {
+  frameId: number | null;
+  lastTimestamp: number;
+  list: HTMLElement | null;
+  pointerY: number;
+  velocity: number;
+} = {
+  frameId: null,
+  lastTimestamp: 0,
+  list: null,
+  pointerY: 0,
+  velocity: 0
+};
+let ticketDropCleanupFrameId: number | null = null;
 
 async function main() {
   bindGlobalKeys();
@@ -1177,6 +1193,8 @@ function bindTicketEvents() {
 
     card.addEventListener("dragend", () => {
       state.draggingId = null;
+      cancelTicketDropCleanup();
+      stopTicketAutoScroll();
       clearDropIndicators();
       document
         .querySelectorAll(".is-dragging, .is-drag-over")
@@ -1200,19 +1218,34 @@ function bindTicketEvents() {
         return;
       }
 
-      list.classList.add("is-drag-over");
+      cancelTicketDropCleanup();
+      setActiveDropList(list);
+      updateTicketAutoScroll(list, event.clientY);
       updateDropIndicator(list, getInsertionBeforeId(list, event.clientY));
     });
 
     column.addEventListener("dragleave", (event) => {
-      if (!column.contains(event.relatedTarget as Node | null)) {
-        column.querySelector(".ticket-list")?.classList.remove("is-drag-over");
-        clearDropIndicators();
+      const relatedTarget = event.relatedTarget as Node | null;
+
+      if (relatedTarget && column.contains(relatedTarget)) {
+        return;
       }
+
+      if (isPointInsideElement(column, event.clientX, event.clientY)) {
+        return;
+      }
+
+      if (!relatedTarget && event.clientX === 0 && event.clientY === 0) {
+        return;
+      }
+
+      scheduleTicketDropCleanup(column);
     });
 
     column.addEventListener("drop", async (event) => {
       event.preventDefault();
+      cancelTicketDropCleanup();
+      stopTicketAutoScroll();
       column.querySelector(".ticket-list")?.classList.remove("is-drag-over");
 
       const ticketId = event.dataTransfer?.getData(ticketDragType) || state.draggingId;
@@ -1490,15 +1523,15 @@ async function moveTicket(ticketId: string, status: Status, beforeId?: string) {
   const positions = renumberTickets(nextTickets);
 
   state.tickets = nextTickets.sort(sortTickets);
-  render();
+  render({ preserveScroll: true });
 
   try {
     state.tickets = await api.reorderTickets(state.selectedProjectId, positions);
-    render();
+    render({ preserveScroll: true });
   } catch (error) {
-    showError(error);
+    showError(error, { preserveScroll: true });
     await loadTickets(state.selectedProjectId);
-    render();
+    render({ preserveScroll: true });
   }
 }
 
@@ -1565,21 +1598,183 @@ function getInsertionBeforeId(list: HTMLElement, pointerY: number) {
   return undefined;
 }
 
-function updateDropIndicator(list: HTMLElement, beforeId?: string) {
-  clearDropIndicators();
+function updateTicketAutoScroll(list: HTMLElement, pointerY: number) {
+  const velocity = getTicketAutoScrollVelocity(list, pointerY);
 
-  if (beforeId) {
-    findTicketCard(beforeId, list)?.classList.add("is-drop-before");
+  if (velocity === 0) {
+    stopTicketAutoScroll();
     return;
   }
 
+  if (ticketAutoScroll.list !== list) {
+    ticketAutoScroll.lastTimestamp = 0;
+  }
+
+  ticketAutoScroll.list = list;
+  ticketAutoScroll.pointerY = pointerY;
+  ticketAutoScroll.velocity = velocity;
+
+  if (ticketAutoScroll.frameId === null) {
+    ticketAutoScroll.frameId = requestAnimationFrame(stepTicketAutoScroll);
+  }
+}
+
+function getTicketAutoScrollVelocity(list: HTMLElement, pointerY: number) {
+  const maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
+
+  if (maxScrollTop === 0) {
+    return 0;
+  }
+
+  const rect = list.getBoundingClientRect();
+  const edgeSize = Math.min(ticketAutoScrollEdge, rect.height / 2);
+  const topDistance = pointerY - rect.top;
+  const bottomDistance = rect.bottom - pointerY;
+
+  if (topDistance < edgeSize && list.scrollTop > 0) {
+    return -ticketAutoScrollMaxSpeed * getTicketAutoScrollIntensity(topDistance, edgeSize);
+  }
+
+  if (bottomDistance < edgeSize && list.scrollTop < maxScrollTop) {
+    return ticketAutoScrollMaxSpeed * getTicketAutoScrollIntensity(bottomDistance, edgeSize);
+  }
+
+  return 0;
+}
+
+function getTicketAutoScrollIntensity(distance: number, edgeSize: number) {
+  return Math.min(1, Math.max(0, edgeSize - distance) / edgeSize);
+}
+
+function stepTicketAutoScroll(timestamp: number) {
+  const list = ticketAutoScroll.list;
+
+  if (!list || !state.draggingId) {
+    stopTicketAutoScroll();
+    return;
+  }
+
+  const maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
+  const elapsed = ticketAutoScroll.lastTimestamp
+    ? Math.min(timestamp - ticketAutoScroll.lastTimestamp, 32)
+    : 16;
+  const nextScrollTop = Math.min(
+    maxScrollTop,
+    Math.max(0, list.scrollTop + (ticketAutoScroll.velocity * elapsed) / 1000)
+  );
+
+  ticketAutoScroll.lastTimestamp = timestamp;
+
+  if (nextScrollTop === list.scrollTop && (nextScrollTop === 0 || nextScrollTop === maxScrollTop)) {
+    stopTicketAutoScroll();
+    return;
+  }
+
+  list.scrollTop = nextScrollTop;
+  updateDropIndicator(list, getInsertionBeforeId(list, ticketAutoScroll.pointerY));
+
+  ticketAutoScroll.velocity = getTicketAutoScrollVelocity(list, ticketAutoScroll.pointerY);
+
+  if (ticketAutoScroll.velocity === 0) {
+    stopTicketAutoScroll();
+    return;
+  }
+
+  ticketAutoScroll.frameId = requestAnimationFrame(stepTicketAutoScroll);
+}
+
+function stopTicketAutoScroll() {
+  if (ticketAutoScroll.frameId !== null) {
+    cancelAnimationFrame(ticketAutoScroll.frameId);
+  }
+
+  ticketAutoScroll.frameId = null;
+  ticketAutoScroll.lastTimestamp = 0;
+  ticketAutoScroll.list = null;
+  ticketAutoScroll.pointerY = 0;
+  ticketAutoScroll.velocity = 0;
+}
+
+function scheduleTicketDropCleanup(column: HTMLElement) {
+  cancelTicketDropCleanup();
+  ticketDropCleanupFrameId = requestAnimationFrame(() => {
+    ticketDropCleanupFrameId = null;
+
+    if (!state.draggingId) {
+      return;
+    }
+
+    stopTicketAutoScroll();
+    column.querySelector(".ticket-list")?.classList.remove("is-drag-over");
+    clearDropIndicators();
+  });
+}
+
+function cancelTicketDropCleanup() {
+  if (ticketDropCleanupFrameId !== null) {
+    cancelAnimationFrame(ticketDropCleanupFrameId);
+  }
+
+  ticketDropCleanupFrameId = null;
+}
+
+function isPointInsideElement(element: HTMLElement, clientX: number, clientY: number) {
+  const rect = element.getBoundingClientRect();
+
+  return clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom;
+}
+
+function setActiveDropList(list: HTMLElement) {
+  document.querySelectorAll<HTMLElement>(".ticket-list.is-drag-over").forEach((candidate) => {
+    if (candidate !== list) {
+      candidate.classList.remove("is-drag-over");
+    }
+  });
+
+  list.classList.add("is-drag-over");
+}
+
+function updateDropIndicator(list: HTMLElement, beforeId?: string) {
+  const currentBefore = document.querySelector<HTMLElement>(".ticket-card.is-drop-before");
+  const currentAfter = document.querySelector<HTMLElement>(".ticket-card.is-drop-after");
+  const currentEnd = document.querySelector<HTMLElement>(".ticket-list.is-drop-at-end");
+
+  if (beforeId) {
+    const nextBefore = findTicketCard(beforeId, list);
+
+    if (nextBefore && currentBefore === nextBefore && !currentAfter && !currentEnd) {
+      return;
+    }
+
+    clearDropIndicators();
+    nextBefore?.classList.add("is-drop-before");
+    return;
+  }
+
+  const nextAfter = findLastTicketCard(list);
+
+  if (nextAfter) {
+    if (currentAfter === nextAfter && !currentBefore && !currentEnd) {
+      return;
+    }
+
+    clearDropIndicators();
+    nextAfter.classList.add("is-drop-after");
+    return;
+  }
+
+  if (currentEnd === list && !currentBefore && !currentAfter) {
+    return;
+  }
+
+  clearDropIndicators();
   list.classList.add("is-drop-at-end");
 }
 
 function clearDropIndicators() {
   document
-    .querySelectorAll(".is-drop-before, .is-drop-at-end")
-    .forEach((node) => node.classList.remove("is-drop-before", "is-drop-at-end"));
+    .querySelectorAll(".is-drop-before, .is-drop-after, .is-drop-at-end")
+    .forEach((node) => node.classList.remove("is-drop-before", "is-drop-after", "is-drop-at-end"));
 }
 
 function findTicketCard(ticketId: string, root: ParentNode = document) {
@@ -1588,6 +1783,12 @@ function findTicketCard(ticketId: string, root: ParentNode = document) {
       (card) => card.dataset.ticketId === ticketId
     ) ?? null
   );
+}
+
+function findLastTicketCard(root: ParentNode = document) {
+  const cards = Array.from(root.querySelectorAll<HTMLElement>(".ticket-card:not(.is-dragging)"));
+
+  return cards[cards.length - 1] ?? null;
 }
 
 function focusTicket(ticketId: string) {
@@ -2616,10 +2817,10 @@ async function copyText(value: string) {
   }
 }
 
-function showError(error: unknown) {
+function showError(error: unknown, renderOptions: RenderOptions = {}) {
   state.error = error instanceof Error ? error.message : String(error);
   state.isLoading = false;
-  render();
+  render(renderOptions);
 }
 
 const api = {
