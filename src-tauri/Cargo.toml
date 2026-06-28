@@ -5,6 +5,7 @@ description = "A lightweight Markdown-backed task board"
 authors = ["todo.md"]
 edition = "2021"
 rust-version = "1.77"
+publish = false
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
