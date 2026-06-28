@@ -27,6 +27,7 @@ import {
   Copy,
   createIcons,
   Folder,
+  FolderOpen,
   FolderPlus,
   GripVertical,
   ListTodo,
@@ -278,6 +279,10 @@ function renderProjectMenu() {
       <button data-project-action="copy-project-path" data-project-id="${escapeAttr(project.id)}" role="menuitem">
         ${icon("copy")}
         <span>Copy path</span>
+      </button>
+      <button data-project-action="open-project" data-project-id="${escapeAttr(project.id)}" role="menuitem">
+        ${icon("folder-open")}
+        <span>Open</span>
       </button>
       <button
         data-project-action="move-project-up"
@@ -584,6 +589,10 @@ function bindProjectEvents() {
         void copyProjectPath(projectId);
       }
 
+      if (action === "open-project") {
+        void openProject(projectId);
+      }
+
       if (action === "move-project-up") {
         void moveProjectBy(projectId, -1);
       }
@@ -727,7 +736,7 @@ function bindProjectEvents() {
 
 function openProjectMenu(projectId: string, x: number, y: number) {
   const menuWidth = 208;
-  const menuHeight = 178;
+  const menuHeight = 250;
 
   state.projectMenu = {
     projectId,
@@ -800,6 +809,15 @@ async function copyProjectPath(projectId: string) {
 
   try {
     await copyText(project.path);
+    closeProjectMenu();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function openProject(projectId: string) {
+  try {
+    await api.openProject(projectId);
     closeProjectMenu();
   } catch (error) {
     showError(error);
@@ -1781,6 +1799,7 @@ function hydrateIcons() {
       CircleCheck,
       Copy,
       Folder,
+      FolderOpen,
       FolderPlus,
       GripVertical,
       ListTodo,
@@ -1889,6 +1908,13 @@ const api = {
     }
 
     return mockStore.reorderProjects(projectIds);
+  },
+  async openProject(projectId: string) {
+    if (isTauriRuntime) {
+      return invoke<void>("open_project_folder", { projectId });
+    }
+
+    return mockStore.openProject(projectId);
   },
   async listTickets(projectId: string) {
     if (isTauriRuntime) {
@@ -2084,6 +2110,13 @@ const mockStore = (() => {
       write(store);
 
       return store.workspace;
+    },
+    async openProject(projectId: string) {
+      const project = read().workspace.projects.find((candidate) => candidate.id === projectId);
+
+      if (!project) {
+        throw new Error("Project not found.");
+      }
     },
     async listTickets(projectId: string) {
       return read().tickets[projectId] ?? [];

@@ -3,6 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
+    process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Manager};
@@ -219,6 +220,13 @@ fn reorder_projects(app: AppHandle, project_ids: Vec<String>) -> Result<Workspac
     reorder_project_records(&mut registry, &project_ids)?;
     save_project_registry(&app, &registry)?;
     workspace_info_from_registry(&app, &registry)
+}
+
+#[tauri::command]
+fn open_project_folder(app: AppHandle, project_id: String) -> Result<(), String> {
+    let project_dir = project_dir(&app, &project_id)?;
+
+    open_path_in_file_explorer(&project_dir)
 }
 
 #[tauri::command]
@@ -599,6 +607,31 @@ fn is_removed_project_path(registry: &ProjectRegistry, path: &str) -> bool {
         .removed_project_paths
         .iter()
         .any(|candidate| same_path_string(candidate, path))
+}
+
+fn open_path_in_file_explorer(path: &Path) -> Result<(), String> {
+    let (program, args) = file_explorer_command(path);
+
+    Command::new(program)
+        .args(args)
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| format!("Could not open project folder: {err}"))
+}
+
+#[cfg(target_os = "macos")]
+fn file_explorer_command(path: &Path) -> (&'static str, Vec<String>) {
+    ("/usr/bin/open", vec![path.to_string_lossy().to_string()])
+}
+
+#[cfg(target_os = "windows")]
+fn file_explorer_command(path: &Path) -> (&'static str, Vec<String>) {
+    ("explorer", vec![path.to_string_lossy().to_string()])
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+fn file_explorer_command(path: &Path) -> (&'static str, Vec<String>) {
+    ("xdg-open", vec![path.to_string_lossy().to_string()])
 }
 
 fn read_project_disk_meta(project_dir: &Path) -> Result<ProjectDiskMeta, String> {
@@ -1102,6 +1135,7 @@ fn main() {
             update_project_name,
             remove_project,
             reorder_projects,
+            open_project_folder,
             list_tickets,
             create_ticket,
             update_ticket,
@@ -1268,6 +1302,17 @@ mod tests {
         fs::remove_dir_all(alpha_dir).expect("cleanup alpha");
         fs::remove_dir_all(beta_dir).expect("cleanup beta");
         fs::remove_dir_all(gamma_dir).expect("cleanup gamma");
+    }
+
+    #[test]
+    fn file_explorer_command_targets_project_folder() {
+        let dir = temp_project_dir("open-project");
+        let (program, args) = file_explorer_command(&dir);
+
+        assert!(!program.is_empty());
+        assert_eq!(args, vec![dir.to_string_lossy().to_string()]);
+
+        fs::remove_dir_all(dir).expect("cleanup");
     }
 
     #[test]
