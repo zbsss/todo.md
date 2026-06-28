@@ -175,8 +175,7 @@ select:focus {
 .ghost-button,
 .save-button,
 .sidebar-action,
-.project-item,
-.mode-tabs button {
+.project-item {
   border: 0;
 }
 
@@ -199,8 +198,7 @@ select:focus {
 
 .icon-button:hover,
 .ghost-button:hover,
-.save-button:hover,
-.mode-tabs button:hover {
+.save-button:hover {
   transform: translateY(-1px);
 }
 
@@ -230,8 +228,7 @@ select:focus {
 .save-button svg,
 .project-icon svg,
 .column-icon svg,
-.ticket-topline svg,
-.mode-tabs svg {
+.ticket-topline svg {
   width: 18px;
   height: 18px;
   stroke-width: 2;
@@ -661,7 +658,7 @@ select:focus {
   display: grid;
   width: min(1050px, 100%);
   max-height: min(780px, 100%);
-  grid-template-rows: auto auto minmax(260px, 1fr) auto;
+  grid-template-rows: auto minmax(260px, 1fr) auto;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.48);
   border-radius: 8px;
@@ -710,56 +707,169 @@ select:focus {
   background: white;
 }
 
-.mode-tabs {
-  display: flex;
-  gap: 8px;
-  padding: 12px 18px 0;
-}
-
-.mode-tabs button {
-  display: inline-flex;
-  height: 34px;
-  align-items: center;
-  gap: 7px;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--muted);
-  padding: 0 11px;
-}
-
-.mode-tabs button.active {
-  background: var(--accent-soft);
-  color: var(--accent-strong);
-}
-
 .editor-body {
   display: grid;
   min-height: 0;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 14px;
   overflow: hidden;
-  padding: 14px 18px 18px;
+  padding: 16px 18px 18px;
 }
 
-.editor-body.write textarea,
-.editor-body.write .preview-pane {
-  display: block;
-}
-
-.editor-body.preview textarea {
-  display: none;
-}
-
-.editor-body.preview {
-  grid-template-columns: 1fr;
-}
-
-.preview-pane {
-  overflow: auto;
+.markdown-editor-shell {
+  min-height: 0;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: white;
-  padding: 15px;
+}
+
+.markdown-editor,
+.markdown-editor .cm-editor {
+  height: 100%;
+}
+
+.markdown-editor .cm-editor {
+  background: white;
+  color: var(--ink);
+  font-size: 0.95rem;
+  line-height: 1.65;
+}
+
+.markdown-editor .cm-editor.cm-focused {
+  outline: none;
+}
+
+.markdown-editor .cm-scroller {
+  overflow: auto;
+  font-family: inherit;
+}
+
+.markdown-editor .cm-content {
+  min-height: 420px;
+  padding: 16px 22px 22px;
+  caret-color: var(--accent-strong);
+}
+
+.markdown-editor .cm-line {
+  min-height: 1.55em;
+  padding: 3px 0;
+}
+
+.markdown-editor .cm-placeholder {
+  color: var(--muted);
+}
+
+.markdown-editor .cm-cursor {
+  border-left-color: var(--accent-strong);
+}
+
+.markdown-editor .cm-selectionBackground,
+.markdown-editor .cm-content ::selection {
+  background: rgba(35, 108, 90, 0.18);
+}
+
+.markdown-editor .cm-md-heading-line {
+  color: var(--ink);
+  font-weight: 850;
+  line-height: 1.25;
+  padding-top: 10px;
+}
+
+.markdown-editor .cm-md-heading-line span {
+  text-decoration: none;
+}
+
+.markdown-editor .cm-md-heading-1 {
+  font-size: 1.48rem;
+}
+
+.markdown-editor .cm-md-heading-2 {
+  font-size: 1.24rem;
+}
+
+.markdown-editor .cm-md-heading-3 {
+  font-size: 1.08rem;
+}
+
+.markdown-editor .cm-md-quote-line {
+  border-left: 3px solid var(--accent);
+  color: var(--muted);
+  padding-left: 12px;
+}
+
+.markdown-editor .cm-md-list-line {
+  color: #2f302d;
+}
+
+.markdown-editor .cm-md-task-line {
+  color: #2f302d;
+}
+
+.markdown-editor .cm-md-task-done {
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.markdown-editor .cm-task-checkbox {
+  display: inline-flex;
+  width: 24px;
+  align-items: center;
+  justify-content: flex-start;
+  vertical-align: -3px;
+}
+
+.markdown-editor .cm-task-checkbox input {
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.markdown-editor .cm-list-bullet {
+  display: inline-block;
+  width: 1.35em;
+  color: var(--accent);
+  font-weight: 850;
+}
+
+.markdown-editor .cm-md-inline-code {
+  border-radius: 5px;
+  background: #eee8db;
+  color: #2d2b27;
+  padding: 1px 4px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+}
+
+.markdown-editor .cm-md-code-line {
+  background: #252520;
+  color: #f8f3e8;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.9rem;
+  padding-right: 12px;
+  padding-left: 12px;
+}
+
+.markdown-editor .cm-md-code-fence {
+  color: #b9b29f;
+}
+
+.markdown-editor .cm-md-strong {
+  font-weight: 800;
+}
+
+.markdown-editor .cm-md-emphasis {
+  font-style: italic;
+}
+
+.markdown-editor .cm-md-link {
+  color: var(--blue);
+  font-weight: 750;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
 }
 
 .editor-footer {
@@ -814,7 +924,7 @@ select:focus {
   }
 
   .editor-body {
-    grid-template-columns: 1fr;
+    padding: 14px;
   }
 }
 
