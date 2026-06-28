@@ -19,6 +19,7 @@ import {
   WidgetType
 } from "@codemirror/view";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import {
   ArrowDown,
@@ -80,6 +81,11 @@ type SavedTicketImage = {
   alt: string;
 };
 
+type MockStore = {
+  workspace: WorkspaceInfo;
+  tickets: Record<string, Ticket[]>;
+};
+
 type MarkdownRenderOptions = {
   compact?: boolean;
   skipImages?: boolean;
@@ -88,6 +94,10 @@ type MarkdownRenderOptions = {
 
 type RenderOptions = {
   preserveScroll?: boolean;
+};
+
+type SaveDraftOptions = {
+  flush?: boolean;
 };
 
 type ScrollSnapshot = {
@@ -100,6 +110,8 @@ type ScrollSnapshot = {
   }>;
 };
 
+const untitledTicketTitle = "Untitled ticket";
+const mockStorageKey = "todo.md-demo";
 const columns: Array<{ id: Status; label: string; icon: string }> = [
   { id: "todo", label: "To do", icon: "list-todo" },
   { id: "doing", label: "Doing", icon: "loader-circle" },
@@ -131,6 +143,7 @@ const state: {
   renamingProjectName: string;
   isLoading: boolean;
   error: string | null;
+  draftSaveError: string | null;
 } = {
   workspace: null,
   selectedProjectId: null,
@@ -144,12 +157,20 @@ const state: {
   renamingProjectId: null,
   renamingProjectName: "",
   isLoading: true,
-  error: null
+  error: null,
+  draftSaveError: null
 };
 
 const isTauriRuntime = "__TAURI_INTERNALS__" in window;
 let markdownEditorView: EditorView | null = null;
 const pendingImageUploads = new Set<Promise<void>>();
+const draftAutosaveDelayMs = 700;
+const draftAutosaveRetryDelayMs = 5000;
+const closeAutosaveTimeoutMs = 2000;
+let draftAutosaveTimer: ReturnType<typeof window.setTimeout> | null = null;
+let draftSavePromise: Promise<void> | null = null;
+let draftSaveRunId = 0;
+let isClosingWindow = false;
 const ticketAutoScrollEdge = 72;
 const ticketAutoScrollMaxSpeed = 360;
 const ticketAutoScroll: {
@@ -169,6 +190,7 @@ let ticketDropCleanupFrameId: number | null = null;
 
 async function main() {
   bindGlobalKeys();
+  await bindWindowCloseGuards();
   await loadWorkspace();
 }
 
@@ -563,11 +585,10 @@ function renderEditor() {
         </div>
 
         <footer class="editor-footer">
-          <p>${escapeHtml(shortPath(ticket.filePath))}</p>
-          <button class="save-button" data-action="save-ticket">
-            ${icon("save")}
-            <span>Save</span>
-          </button>
+          <div class="editor-footer-info">
+            <p>${escapeHtml(shortPath(ticket.filePath))}</p>
+            ${state.draftSaveError ? `<p class="editor-save-error">${escapeHtml(state.draftSaveError)}</p>` : ""}
+          </div>
         </footer>
       </section>
     </div>
@@ -607,6 +628,8 @@ function bindProjectEvents() {
         const project = await api.createProject(name);
         state.workspace?.projects.push(project);
         state.selectedProjectId = project.id;
+        state.selectedTicketId = null;
+        state.draft = null;
         state.tickets = [];
         input.value = "";
         await loadTickets(project.id);
@@ -636,6 +659,8 @@ function bindProjectEvents() {
 
       const project = await api.importProject(path);
       state.selectedProjectId = project.id;
+      state.selectedTicketId = null;
+      state.draft = null;
       await loadWorkspace();
     } catch (error) {
       showError(error);
@@ -1294,10 +1319,6 @@ function bindEditorEvents() {
       void requestCloseEditor();
     }
 
-    if (action === "save-ticket") {
-      void saveDraft();
-    }
-
     if (action === "delete-ticket") {
       void deleteSelectedTicket();
     }
@@ -1306,12 +1327,14 @@ function bindEditorEvents() {
   titleInput?.addEventListener("input", () => {
     if (state.draft) {
       state.draft.title = titleInput.value;
+      scheduleDraftSave();
     }
   });
 
   statusSelect?.addEventListener("change", () => {
     if (state.draft) {
       state.draft.status = statusSelect.value as Status;
+      scheduleDraftSave();
     }
   });
 }
@@ -1334,7 +1357,7 @@ function bindGlobalKeys() {
 
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s" && state.draft) {
       event.preventDefault();
-      void saveDraft();
+      void saveDraft({ flush: true });
     }
   });
 }
@@ -1354,41 +1377,31 @@ function openEditor(ticketId: string) {
     status: ticket.status,
     pastedImages: []
   };
+  state.draftSaveError = null;
   render();
   document.querySelector<HTMLInputElement>("#editor-title")?.focus();
 }
 
 function closeEditor() {
+  clearScheduledDraftSave();
   state.selectedTicketId = null;
   state.draft = null;
+  state.draftSaveError = null;
   render();
 }
 
 async function requestCloseEditor() {
-  if (await confirmDiscardDraft()) {
+  if (await saveDraft({ flush: true })) {
     closeEditor();
   }
 }
 
 async function confirmDiscardDraft() {
-  if (!hasUnsavedDraft()) {
+  if (!state.draft) {
     return true;
   }
 
-  const confirmed = await confirmAction("Discard unsaved changes?", "Unsaved changes");
-
-  if (!confirmed) {
-    return false;
-  }
-
-  try {
-    await waitForPendingImageUploads();
-    await cleanupDraftImages();
-    return true;
-  } catch (error) {
-    showError(error);
-    return false;
-  }
+  return saveDraft({ flush: true });
 }
 
 async function confirmAction(message: string, title: string) {
@@ -1407,37 +1420,217 @@ function hasUnsavedDraft() {
   }
 
   return (
-    ticket.title !== state.draft.title ||
-    ticket.body !== state.draft.body ||
+    ticket.title !== normalizeDraftTitle(state.draft.title) ||
+    ticket.body !== normalizeDraftBody(state.draft.body) ||
     ticket.status !== state.draft.status ||
     state.draft.pastedImages.length > 0
   );
 }
 
-async function saveDraft() {
-  await waitForPendingImageUploads();
+function normalizeDraftTitle(title: string) {
+  return title.replace(/[\r\n]/g, " ").split(/\s+/).filter(Boolean).join(" ") || untitledTicketTitle;
+}
 
-  if (!state.selectedProjectId || !state.draft) {
+function normalizeDraftBody(body: string) {
+  return body.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trimEnd();
+}
+
+function scheduleDraftSave(delayMs = draftAutosaveDelayMs) {
+  if (!state.draft) {
     return;
   }
 
-  try {
-    const unusedImages = unusedDraftImages(state.draft);
-    await cleanupTicketImages(state.selectedProjectId, unusedImages);
+  clearScheduledDraftSave();
+  draftAutosaveTimer = window.setTimeout(() => {
+    draftAutosaveTimer = null;
+    void saveDraft();
+  }, delayMs);
+}
 
-    const updated = await api.updateTicket(
-      state.selectedProjectId,
-      state.draft.id,
-      state.draft.title,
-      state.draft.body,
-      state.draft.status
-    );
-
-    state.tickets = state.tickets.map((ticket) => (ticket.id === updated.id ? updated : ticket)).sort(sortTickets);
-    closeEditor();
-  } catch (error) {
-    showError(error);
+function clearScheduledDraftSave() {
+  if (!draftAutosaveTimer) {
+    return;
   }
+
+  window.clearTimeout(draftAutosaveTimer);
+  draftAutosaveTimer = null;
+}
+
+async function saveDraft(options: SaveDraftOptions = {}) {
+  clearScheduledDraftSave();
+
+  await waitForActiveDraftSave();
+  clearScheduledDraftSave();
+
+  await waitForPendingImageUploads();
+
+  await waitForActiveDraftSave();
+  clearScheduledDraftSave();
+
+  if (!state.selectedProjectId || !state.draft || !hasUnsavedDraft()) {
+    return true;
+  }
+
+  const savePromise = persistCurrentDraft();
+  const saveRunId = ++draftSaveRunId;
+  draftSavePromise = savePromise;
+  let saved = false;
+
+  try {
+    await savePromise;
+    saved = true;
+  } catch (error) {
+    showDraftSaveError(error);
+    scheduleDraftSave(draftAutosaveRetryDelayMs);
+    return false;
+  } finally {
+    if (draftSaveRunId === saveRunId) {
+      draftSavePromise = null;
+    }
+  }
+
+  if (saved && state.draft && hasUnsavedDraft()) {
+    if (options.flush) {
+      return saveDraft(options);
+    }
+
+    scheduleDraftSave();
+  }
+
+  return true;
+}
+
+async function persistCurrentDraft() {
+  const projectId = state.selectedProjectId;
+  const draft = state.draft;
+
+  if (!projectId || !draft) {
+    return;
+  }
+
+  const ticketId = draft.id;
+  const title = normalizeDraftTitle(draft.title);
+  const body = normalizeDraftBody(draft.body);
+  const status = draft.status;
+  const imagePaths = [...draft.pastedImages];
+  const unusedImages = unusedDraftImages(draft);
+  await cleanupTicketImages(projectId, unusedImages);
+
+  const updated = await api.updateTicket(projectId, ticketId, title, body, status);
+
+  clearDraftSaveError();
+  state.tickets = state.tickets.map((ticket) => (ticket.id === updated.id ? updated : ticket)).sort(sortTickets);
+
+  if (state.draft?.id === ticketId) {
+    const savedImages = new Set(imagePaths);
+    state.draft.pastedImages = state.draft.pastedImages.filter((imagePath) => !savedImages.has(imagePath));
+  }
+}
+
+async function waitForActiveDraftSave() {
+  await draftSavePromise?.catch(() => undefined);
+}
+
+async function bindWindowCloseGuards() {
+  if (isTauriRuntime) {
+    const appWindow = getCurrentWindow();
+
+    await appWindow.onCloseRequested(async (event) => {
+      if (isClosingWindow || !state.draft || !hasUnsavedDraft()) {
+        return;
+      }
+
+      event.preventDefault();
+      isClosingWindow = true;
+
+      try {
+        await Promise.race([saveDraft({ flush: true }), wait(closeAutosaveTimeoutMs)]);
+      } finally {
+        await appWindow.destroy();
+      }
+    });
+  } else {
+    window.addEventListener("beforeunload", (event) => {
+      if (!state.draft || !hasUnsavedDraft()) {
+        return;
+      }
+
+      if (persistMockDraftSync()) {
+        return;
+      }
+
+      void saveDraft({ flush: true });
+      event.preventDefault();
+      event.returnValue = "";
+    });
+  }
+
+  window.addEventListener("pagehide", () => {
+    if (state.draft && !persistMockDraftSync()) {
+      void saveDraft({ flush: true });
+    }
+  });
+}
+
+function wait(ms: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function persistMockDraftSync() {
+  if (isTauriRuntime || !state.selectedProjectId || !state.draft) {
+    return false;
+  }
+
+  if (pendingImageUploads.size > 0 || hasPendingPastePlaceholder(state.draft.body)) {
+    return false;
+  }
+
+  try {
+    const raw = localStorage.getItem(mockStorageKey);
+
+    if (!raw) {
+      return false;
+    }
+
+    const store = JSON.parse(raw) as MockStore;
+    const projectId = state.selectedProjectId;
+    const draft = state.draft;
+    let updated: Ticket | null = null;
+
+    store.tickets[projectId] = (store.tickets[projectId] ?? []).map((ticket) => {
+      if (ticket.id !== draft.id) {
+        return ticket;
+      }
+
+      updated = {
+        ...ticket,
+        title: normalizeDraftTitle(draft.title),
+        body: normalizeDraftBody(draft.body),
+        status: draft.status,
+        updatedAt: Date.now()
+      };
+      return updated;
+    });
+
+    if (!updated) {
+      return false;
+    }
+
+    localStorage.setItem(mockStorageKey, JSON.stringify(store));
+    clearScheduledDraftSave();
+    clearDraftSaveError();
+    state.tickets = state.tickets.map((ticket) => (ticket.id === updated?.id ? updated : ticket)).sort(sortTickets);
+    state.draft.pastedImages = [];
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasPendingPastePlaceholder(body: string) {
+  return /todo-md-paste-\d+-[a-z0-9]+/.test(body);
 }
 
 async function deleteSelectedTicket() {
@@ -1460,6 +1653,8 @@ async function deleteTicket(ticketId: string) {
   }
 
   try {
+    clearScheduledDraftSave();
+    await waitForActiveDraftSave();
     await waitForPendingImageUploads();
     await cleanupDraftImages();
     await api.deleteTicket(state.selectedProjectId, ticket.id);
@@ -1986,6 +2181,7 @@ function mountMarkdownEditor(parent: HTMLElement, value: string) {
         EditorView.updateListener.of((update) => {
           if (update.docChanged && state.draft) {
             state.draft.body = update.state.doc.toString();
+            scheduleDraftSave();
           }
         })
       ]
@@ -2817,10 +3013,28 @@ async function copyText(value: string) {
   }
 }
 
+function showDraftSaveError(error: unknown) {
+  state.draftSaveError = `Autosave failed. Retrying... ${errorMessage(error)}`;
+  render();
+}
+
+function clearDraftSaveError() {
+  if (!state.draftSaveError) {
+    return;
+  }
+
+  state.draftSaveError = null;
+  document.querySelector<HTMLElement>(".editor-save-error")?.remove();
+}
+
 function showError(error: unknown, renderOptions: RenderOptions = {}) {
-  state.error = error instanceof Error ? error.message : String(error);
+  state.error = errorMessage(error);
   state.isLoading = false;
   render(renderOptions);
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 const api = {
@@ -2925,14 +3139,7 @@ const api = {
 };
 
 const mockStore = (() => {
-  const storageKey = "todo.md-demo";
-
-  type Store = {
-    workspace: WorkspaceInfo;
-    tickets: Record<string, Ticket[]>;
-  };
-
-  const seed = (): Store => {
+  const seed = (): MockStore => {
     const now = Date.now();
     const project: ProjectSummary = {
       id: "inbox",
@@ -2983,8 +3190,8 @@ const mockStore = (() => {
     };
   };
 
-  const read = (): Store => {
-    const raw = localStorage.getItem(storageKey);
+  const read = (): MockStore => {
+    const raw = localStorage.getItem(mockStorageKey);
 
     if (!raw) {
       const next = seed();
@@ -2992,10 +3199,10 @@ const mockStore = (() => {
       return next;
     }
 
-    return JSON.parse(raw) as Store;
+    return JSON.parse(raw) as MockStore;
   };
 
-  const write = (store: Store) => localStorage.setItem(storageKey, JSON.stringify(store));
+  const write = (store: MockStore) => localStorage.setItem(mockStorageKey, JSON.stringify(store));
   const slugify = (value: string) =>
     value
       .toLowerCase()

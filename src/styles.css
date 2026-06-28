@@ -1053,11 +1053,21 @@ select:focus {
 
 .editor-footer {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   align-items: center;
   border-top: 1px solid var(--line);
   padding: 12px 18px;
+}
+
+.editor-footer-info {
+  min-width: 0;
+}
+
+.editor-save-error {
+  margin-top: 4px;
+  color: #8f3030;
+  white-space: normal;
 }
 
 @media (max-width: 920px) {
