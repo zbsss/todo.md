@@ -1986,9 +1986,21 @@ function buildInlineMarkdownDecorations(editorState: EditorState, editorHasFocus
     const isFence = text.trimStart().startsWith("```");
 
     if (inCodeFence || isFence) {
-      decorations.push(Decoration.line({ class: "cm-md-code-line" }).range(line.from));
-      if (isFence) {
+      const codeLineClasses = ["cm-md-code-line"];
+
+      if (isFence && !inCodeFence) {
+        codeLineClasses.push("cm-md-code-line-start");
+      }
+
+      if (isFence && inCodeFence) {
+        codeLineClasses.push("cm-md-code-line-end");
+      }
+
+      decorations.push(Decoration.line({ class: codeLineClasses.join(" ") }).range(line.from));
+      if (isFence && isActive) {
         decorations.push(Decoration.mark({ class: "cm-md-code-fence" }).range(line.from, line.to));
+      } else if (isFence) {
+        decorations.push(Decoration.replace({}).range(line.from, line.to));
       }
       inCodeFence = isFence ? !inCodeFence : inCodeFence;
       continue;
