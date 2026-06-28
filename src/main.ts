@@ -98,6 +98,7 @@ const state: {
   draggingId: string | null;
   draggingProjectId: string | null;
   projectMenu: { projectId: string; x: number; y: number } | null;
+  ticketMenu: { ticketId: string; x: number; y: number } | null;
   renamingProjectId: string | null;
   renamingProjectName: string;
   isLoading: boolean;
@@ -111,6 +112,7 @@ const state: {
   draggingId: null,
   draggingProjectId: null,
   projectMenu: null,
+  ticketMenu: null,
   renamingProjectId: null,
   renamingProjectName: "",
   isLoading: true,
@@ -214,6 +216,7 @@ function render() {
     </div>
 
     ${renderProjectMenu()}
+    ${renderTicketMenu()}
     ${renderProjectRenameDialog()}
     ${renderEditor()}
   `;
@@ -267,7 +270,7 @@ function renderProjectMenu() {
   return `
     <div class="context-menu-backdrop" data-action="close-project-menu"></div>
     <div
-      class="project-context-menu"
+      class="context-menu project-context-menu"
       role="menu"
       style="left: ${state.projectMenu.x}px; top: ${state.projectMenu.y}px;"
       aria-label="${escapeAttr(project.name)} project menu"
@@ -310,6 +313,42 @@ function renderProjectMenu() {
       >
         ${icon("trash-2")}
         <span>Remove</span>
+      </button>
+    </div>
+  `;
+}
+
+function renderTicketMenu() {
+  if (!state.ticketMenu) {
+    return "";
+  }
+
+  const ticket = getTicket(state.ticketMenu.ticketId);
+
+  if (!ticket) {
+    return "";
+  }
+
+  return `
+    <div class="context-menu-backdrop" data-action="close-ticket-menu"></div>
+    <div
+      class="context-menu ticket-context-menu"
+      role="menu"
+      style="left: ${state.ticketMenu.x}px; top: ${state.ticketMenu.y}px;"
+      aria-label="${escapeAttr(ticket.title)} task menu"
+    >
+      <button data-ticket-action="copy-ticket-path" data-ticket-id="${escapeAttr(ticket.id)}" role="menuitem">
+        ${icon("copy")}
+        <span>Copy path</span>
+      </button>
+      <button
+        class="danger"
+        data-ticket-action="delete-ticket"
+        data-ticket-id="${escapeAttr(ticket.id)}"
+        role="menuitem"
+      >
+        ${icon("trash-2")}
+        <span>Delete</span>
       </button>
     </div>
   `;
@@ -739,6 +778,7 @@ function openProjectMenu(projectId: string, x: number, y: number) {
   const menuWidth = 208;
   const menuHeight = 250;
 
+  state.ticketMenu = null;
   state.projectMenu = {
     projectId,
     x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
@@ -749,6 +789,36 @@ function openProjectMenu(projectId: string, x: number, y: number) {
 
 function closeProjectMenu(options: { shouldRender?: boolean } = {}) {
   state.projectMenu = null;
+
+  if (options.shouldRender !== false) {
+    render();
+  }
+}
+
+function openTicketMenu(ticketId: string, x: number, y: number) {
+  const menuWidth = 208;
+  const menuHeight = 92;
+
+  state.projectMenu = null;
+  state.ticketMenu = {
+    ticketId,
+    x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
+    y: Math.max(8, Math.min(y, window.innerHeight - menuHeight - 8))
+  };
+  render();
+}
+
+function closeTicketMenu(options: { shouldRender?: boolean } = {}) {
+  state.ticketMenu = null;
+
+  if (options.shouldRender !== false) {
+    render();
+  }
+}
+
+function closeContextMenus(options: { shouldRender?: boolean } = {}) {
+  state.projectMenu = null;
+  state.ticketMenu = null;
 
   if (options.shouldRender !== false) {
     render();
@@ -811,6 +881,22 @@ async function copyProjectPath(projectId: string) {
   try {
     await copyText(project.path);
     closeProjectMenu();
+  } catch (error) {
+    showError(error);
+  }
+}
+
+async function copyTicketPath(ticketId: string) {
+  const ticket = getTicket(ticketId);
+
+  if (!ticket) {
+    closeTicketMenu();
+    return;
+  }
+
+  try {
+    await copyText(ticket.filePath);
+    closeTicketMenu();
   } catch (error) {
     showError(error);
   }
@@ -975,12 +1061,44 @@ function bindTicketEvents() {
       });
     });
 
+  document.querySelector<HTMLElement>('[data-action="close-ticket-menu"]')?.addEventListener("click", () => {
+    closeTicketMenu();
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-ticket-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const ticketId = button.dataset.ticketId;
+      const action = button.dataset.ticketAction;
+
+      if (!ticketId || !action) {
+        return;
+      }
+
+      if (action === "copy-ticket-path") {
+        void copyTicketPath(ticketId);
+      }
+
+      if (action === "delete-ticket") {
+        void deleteTicket(ticketId);
+      }
+    });
+  });
+
   document.querySelectorAll<HTMLElement>(".ticket-card").forEach((card) => {
     card.addEventListener("click", () => {
       const ticketId = card.dataset.ticketId;
 
       if (ticketId) {
         openEditor(ticketId);
+      }
+    });
+
+    card.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      const ticketId = card.dataset.ticketId;
+
+      if (ticketId) {
+        openTicketMenu(ticketId, event.clientX, event.clientY);
       }
     });
 
@@ -1018,6 +1136,7 @@ function bindTicketEvents() {
       event.dataTransfer.effectAllowed = "move";
       event.dataTransfer.setData(ticketDragType, ticketId);
       card.classList.add("is-dragging");
+      closeTicketMenu({ shouldRender: false });
     });
 
     card.addEventListener("dragend", () => {
@@ -1135,8 +1254,8 @@ function bindGlobalKeys() {
       return;
     }
 
-    if (event.key === "Escape" && state.projectMenu) {
-      closeProjectMenu();
+    if (event.key === "Escape" && (state.projectMenu || state.ticketMenu)) {
+      closeContextMenus();
       return;
     }
 
@@ -1233,11 +1352,19 @@ async function saveDraft() {
 }
 
 async function deleteSelectedTicket() {
-  if (!state.selectedProjectId || !state.selectedTicketId) {
+  if (!state.selectedTicketId) {
     return;
   }
 
-  const ticket = getSelectedTicket();
+  await deleteTicket(state.selectedTicketId);
+}
+
+async function deleteTicket(ticketId: string) {
+  if (!state.selectedProjectId) {
+    return;
+  }
+
+  const ticket = getTicket(ticketId);
 
   if (!ticket || !(await confirmAction(`Delete "${ticket.title}"?`, "Delete ticket"))) {
     return;
@@ -1247,7 +1374,14 @@ async function deleteSelectedTicket() {
     await api.deleteTicket(state.selectedProjectId, ticket.id);
     state.tickets = state.tickets.filter((candidate) => candidate.id !== ticket.id);
     state.workspace = updateTicketCount(state.workspace, state.selectedProjectId, -1);
-    closeEditor();
+    state.ticketMenu = null;
+
+    if (state.selectedTicketId === ticket.id) {
+      state.selectedTicketId = null;
+      state.draft = null;
+    }
+
+    render();
   } catch (error) {
     showError(error);
   }
@@ -1394,7 +1528,11 @@ function renumberTickets(tickets: Ticket[]) {
 }
 
 function getSelectedTicket() {
-  return state.tickets.find((ticket) => ticket.id === state.selectedTicketId) ?? null;
+  return state.selectedTicketId ? getTicket(state.selectedTicketId) : null;
+}
+
+function getTicket(ticketId: string) {
+  return state.tickets.find((ticket) => ticket.id === ticketId) ?? null;
 }
 
 function getProject(projectId: string) {
@@ -1935,8 +2073,12 @@ function shortPath(path: string) {
 
 async function copyText(value: string) {
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(value);
-    return;
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Some browser shells expose navigator.clipboard but deny writes.
+    }
   }
 
   const textarea = document.createElement("textarea");
@@ -1948,7 +2090,7 @@ async function copyText(value: string) {
 
   try {
     if (!document.execCommand("copy")) {
-      throw new Error("Could not copy project path.");
+      throw new Error("Could not copy path.");
     }
   } finally {
     textarea.remove();
