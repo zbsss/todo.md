@@ -1,15 +1,33 @@
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { markdown, markdownKeymap, markdownLanguage } from "@codemirror/lang-markdown";
+import {
+  bracketMatching,
+  defaultHighlightStyle,
+  indentOnInput,
+  syntaxHighlighting
+} from "@codemirror/language";
+import { EditorState } from "@codemirror/state";
+import type { Range } from "@codemirror/state";
+import {
+  Decoration,
+  type DecorationSet,
+  EditorView,
+  keymap,
+  placeholder,
+  ViewPlugin,
+  type ViewUpdate,
+  WidgetType
+} from "@codemirror/view";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import {
   CircleCheck,
   createIcons,
-  Eye,
   Folder,
   FolderPlus,
   GripVertical,
   ListTodo,
   LoaderCircle,
-  Pencil,
   Plus,
   RefreshCw,
   Save,
@@ -19,7 +37,6 @@ import {
 import "./styles.css";
 
 type Status = "todo" | "doing" | "done";
-type EditorMode = "write" | "preview";
 
 type ProjectSummary = {
   id: string;
@@ -71,7 +88,6 @@ const state: {
   tickets: Ticket[];
   selectedTicketId: string | null;
   draft: TicketDraft | null;
-  editorMode: EditorMode;
   draggingId: string | null;
   isLoading: boolean;
   error: string | null;
@@ -81,13 +97,13 @@ const state: {
   tickets: [],
   selectedTicketId: null,
   draft: null,
-  editorMode: "write",
   draggingId: null,
   isLoading: true,
   error: null
 };
 
 const isTauriRuntime = "__TAURI_INTERNALS__" in window;
+let markdownEditorView: EditorView | null = null;
 
 async function main() {
   bindGlobalKeys();
@@ -129,6 +145,8 @@ async function loadTickets(projectId: string) {
 }
 
 function render() {
+  destroyMarkdownEditor();
+
   const workspace = state.workspace;
   const currentProject = workspace?.projects.find(
     (project) => project.id === state.selectedProjectId
@@ -331,20 +349,10 @@ function renderEditor() {
           </div>
         </header>
 
-        <div class="mode-tabs" role="tablist">
-          <button class="${state.editorMode === "write" ? "active" : ""}" data-mode="write">
-            ${icon("pencil")}
-            <span>Write</span>
-          </button>
-          <button class="${state.editorMode === "preview" ? "active" : ""}" data-mode="preview">
-            ${icon("eye")}
-            <span>Preview</span>
-          </button>
-        </div>
-
-        <div class="editor-body ${state.editorMode}">
-          <textarea name="body" spellcheck="true">${escapeHtml(state.draft.body)}</textarea>
-          <div class="markdown preview-pane">${renderMarkdown(state.draft.body)}</div>
+        <div class="editor-body">
+          <div class="markdown-editor-shell">
+            <div class="markdown-editor" data-editor-root></div>
+          </div>
         </div>
 
         <footer class="editor-footer">
@@ -584,9 +592,12 @@ function bindEditorEvents() {
   const backdrop = document.querySelector<HTMLElement>(".modal-backdrop");
   const panel = document.querySelector<HTMLElement>(".editor-panel");
   const titleInput = document.querySelector<HTMLInputElement>('.editor-panel input[name="title"]');
-  const bodyTextarea = document.querySelector<HTMLTextAreaElement>('.editor-panel textarea[name="body"]');
+  const editorRoot = document.querySelector<HTMLElement>("[data-editor-root]");
   const statusSelect = document.querySelector<HTMLSelectElement>('.editor-panel select[name="status"]');
-  const preview = document.querySelector<HTMLElement>(".preview-pane");
+
+  if (editorRoot && state.draft) {
+    mountMarkdownEditor(editorRoot, state.draft.body);
+  }
 
   backdrop?.addEventListener("click", (event) => {
     if (event.target === backdrop) {
@@ -596,14 +607,7 @@ function bindEditorEvents() {
 
   panel?.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
-    const modeButton = target.closest<HTMLButtonElement>("[data-mode]");
     const actionButton = target.closest<HTMLButtonElement>("button[data-action]");
-
-    if (modeButton?.dataset.mode) {
-      state.editorMode = modeButton.dataset.mode as EditorMode;
-      render();
-      return;
-    }
 
     if (!actionButton?.dataset.action) {
       return;
@@ -627,15 +631,6 @@ function bindEditorEvents() {
   titleInput?.addEventListener("input", () => {
     if (state.draft) {
       state.draft.title = titleInput.value;
-    }
-  });
-
-  bodyTextarea?.addEventListener("input", () => {
-    if (state.draft) {
-      state.draft.body = bodyTextarea.value;
-      if (preview) {
-        preview.innerHTML = renderMarkdown(state.draft.body);
-      }
     }
   });
 
@@ -673,7 +668,6 @@ function openEditor(ticketId: string) {
     body: ticket.body,
     status: ticket.status
   };
-  state.editorMode = "write";
   render();
   document.querySelector<HTMLInputElement>("#editor-title")?.focus();
 }
@@ -847,6 +841,305 @@ function statusIndex(status: Status) {
   return columns.findIndex((column) => column.id === status);
 }
 
+function mountMarkdownEditor(parent: HTMLElement, value: string) {
+  destroyMarkdownEditor();
+
+  markdownEditorView = new EditorView({
+    parent,
+    state: EditorState.create({
+      doc: value,
+      extensions: [
+        history(),
+        markdown({ base: markdownLanguage, addKeymap: false }),
+        indentOnInput(),
+        bracketMatching(),
+        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        keymap.of([...markdownKeymap, ...historyKeymap, ...defaultKeymap]),
+        inlineMarkdownDecorations,
+        placeholder("Start writing..."),
+        EditorView.lineWrapping,
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged && state.draft) {
+            state.draft.body = update.state.doc.toString();
+          }
+        })
+      ]
+    })
+  });
+}
+
+function destroyMarkdownEditor() {
+  markdownEditorView?.destroy();
+  markdownEditorView = null;
+}
+
+const inlineMarkdownDecorations = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = buildInlineMarkdownDecorations(view.state, view.hasFocus);
+    }
+
+    update(update: ViewUpdate) {
+      if (update.docChanged || update.selectionSet || update.focusChanged || update.viewportChanged) {
+        this.decorations = buildInlineMarkdownDecorations(update.state, update.view.hasFocus);
+      }
+    }
+  },
+  {
+    decorations: (value) => value.decorations
+  }
+);
+
+function buildInlineMarkdownDecorations(editorState: EditorState, editorHasFocus: boolean) {
+  const decorations: Array<Range<Decoration>> = [];
+  const activeLines = editorHasFocus ? activeMarkdownLines(editorState) : new Set<number>();
+  let inCodeFence = false;
+
+  for (let lineNumber = 1; lineNumber <= editorState.doc.lines; lineNumber += 1) {
+    const line = editorState.doc.line(lineNumber);
+    const text = line.text;
+    const isActive = activeLines.has(lineNumber);
+    const isFence = text.trimStart().startsWith("```");
+
+    if (inCodeFence || isFence) {
+      decorations.push(Decoration.line({ class: "cm-md-code-line" }).range(line.from));
+      if (isFence) {
+        decorations.push(Decoration.mark({ class: "cm-md-code-fence" }).range(line.from, line.to));
+      }
+      inCodeFence = isFence ? !inCodeFence : inCodeFence;
+      continue;
+    }
+
+    decorateMarkdownLine(decorations, line.from, line.to, text, isActive);
+  }
+
+  return Decoration.set(decorations, true);
+}
+
+function activeMarkdownLines(editorState: EditorState) {
+  const activeLines = new Set<number>();
+
+  editorState.selection.ranges.forEach((range) => {
+    const from = Math.min(range.from, range.to);
+    const to = Math.max(range.from, range.to);
+    const fromLine = editorState.doc.lineAt(from).number;
+    const toLine = editorState.doc.lineAt(to).number;
+
+    for (let lineNumber = fromLine; lineNumber <= toLine; lineNumber += 1) {
+      activeLines.add(lineNumber);
+    }
+  });
+
+  return activeLines;
+}
+
+function decorateMarkdownLine(
+  decorations: Array<Range<Decoration>>,
+  lineFrom: number,
+  lineTo: number,
+  text: string,
+  isActive: boolean
+) {
+  const heading = /^(#{1,3})(\s+)/.exec(text);
+  const quote = /^>\s?/.exec(text);
+  const task = /^(\s*)([-*]\s+)(\[[ xX]\])\s+/.exec(text);
+  const unordered = /^(\s*)([-*])\s+/.exec(text);
+  const ordered = /^(\s*)(\d+\.)\s+/.exec(text);
+
+  if (heading) {
+    const level = heading[1].length;
+    decorations.push(
+      Decoration.line({ class: `cm-md-heading-line cm-md-heading-${level}` }).range(lineFrom)
+    );
+
+    if (!isActive) {
+      decorations.push(Decoration.replace({}).range(lineFrom, lineFrom + heading[0].length));
+    }
+  }
+
+  if (quote) {
+    decorations.push(Decoration.line({ class: "cm-md-quote-line" }).range(lineFrom));
+
+    if (!isActive) {
+      decorations.push(Decoration.replace({}).range(lineFrom, lineFrom + quote[0].length));
+    }
+  }
+
+  if (task) {
+    const markerFrom = lineFrom + task[1].length;
+    const checkboxFrom = markerFrom + task[2].length;
+    const markerTo = lineFrom + task[0].length;
+    const isChecked = task[3].toLowerCase() === "[x]";
+
+    decorations.push(Decoration.line({ class: "cm-md-task-line" }).range(lineFrom));
+
+    if (isChecked && markerTo < lineTo) {
+      decorations.push(Decoration.mark({ class: "cm-md-task-done" }).range(markerTo, lineTo));
+    }
+
+    if (!isActive) {
+      decorations.push(
+        Decoration.replace({
+          widget: new TaskCheckboxWidget(isChecked, checkboxFrom)
+        }).range(markerFrom, markerTo)
+      );
+    }
+  } else if (unordered) {
+    decorations.push(Decoration.line({ class: "cm-md-list-line" }).range(lineFrom));
+
+    if (!isActive) {
+      const markerFrom = lineFrom + unordered[1].length;
+      decorations.push(
+        Decoration.replace({
+          widget: new BulletWidget()
+        }).range(markerFrom, markerFrom + unordered[2].length + 1)
+      );
+    }
+  } else if (ordered) {
+    decorations.push(Decoration.line({ class: "cm-md-list-line" }).range(lineFrom));
+  }
+
+  decorateInlineMarkdown(decorations, lineFrom, text, isActive);
+}
+
+function decorateInlineMarkdown(
+  decorations: Array<Range<Decoration>>,
+  lineFrom: number,
+  text: string,
+  isActive: boolean
+) {
+  const protectedRanges: Array<{ from: number; to: number }> = [];
+
+  for (const match of text.matchAll(/`([^`\n]+)`/g)) {
+    const from = lineFrom + (match.index ?? 0);
+    const contentFrom = from + 1;
+    const contentTo = contentFrom + match[1].length;
+
+    protectedRanges.push({ from, to: contentTo + 1 });
+    decorations.push(Decoration.mark({ class: "cm-md-inline-code" }).range(contentFrom, contentTo));
+    hideMarkdownRange(decorations, from, contentFrom, isActive);
+    hideMarkdownRange(decorations, contentTo, contentTo + 1, isActive);
+  }
+
+  for (const match of text.matchAll(/\*\*([^*\n]+)\*\*/g)) {
+    const from = lineFrom + (match.index ?? 0);
+    const contentFrom = from + 2;
+    const contentTo = contentFrom + match[1].length;
+
+    if (overlapsProtectedRange(from, contentTo + 2, protectedRanges)) {
+      continue;
+    }
+
+    decorations.push(Decoration.mark({ class: "cm-md-strong" }).range(contentFrom, contentTo));
+    hideMarkdownRange(decorations, from, contentFrom, isActive);
+    hideMarkdownRange(decorations, contentTo, contentTo + 2, isActive);
+  }
+
+  for (const match of text.matchAll(/(^|[^*])\*([^*\n]+)\*(?!\*)/g)) {
+    const prefixLength = match[1].length;
+    const markerFrom = lineFrom + (match.index ?? 0) + prefixLength;
+    const contentFrom = markerFrom + 1;
+    const contentTo = contentFrom + match[2].length;
+
+    if (overlapsProtectedRange(markerFrom, contentTo + 1, protectedRanges)) {
+      continue;
+    }
+
+    decorations.push(Decoration.mark({ class: "cm-md-emphasis" }).range(contentFrom, contentTo));
+    hideMarkdownRange(decorations, markerFrom, contentFrom, isActive);
+    hideMarkdownRange(decorations, contentTo, contentTo + 1, isActive);
+  }
+
+  for (const match of text.matchAll(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g)) {
+    const from = lineFrom + (match.index ?? 0);
+    const labelFrom = from + 1;
+    const labelTo = labelFrom + match[1].length;
+    const to = from + match[0].length;
+
+    if (overlapsProtectedRange(from, to, protectedRanges)) {
+      continue;
+    }
+
+    decorations.push(Decoration.mark({ class: "cm-md-link" }).range(labelFrom, labelTo));
+    hideMarkdownRange(decorations, from, labelFrom, isActive);
+    hideMarkdownRange(decorations, labelTo, to, isActive);
+  }
+}
+
+function overlapsProtectedRange(from: number, to: number, ranges: Array<{ from: number; to: number }>) {
+  return ranges.some((range) => from < range.to && to > range.from);
+}
+
+function hideMarkdownRange(
+  decorations: Array<Range<Decoration>>,
+  from: number,
+  to: number,
+  isActive: boolean
+) {
+  if (!isActive && from < to) {
+    decorations.push(Decoration.replace({}).range(from, to));
+  }
+}
+
+class TaskCheckboxWidget extends WidgetType {
+  constructor(
+    private checked: boolean,
+    private from: number
+  ) {
+    super();
+  }
+
+  eq(widget: WidgetType) {
+    return widget instanceof TaskCheckboxWidget && widget.checked === this.checked && widget.from === this.from;
+  }
+
+  toDOM(view: EditorView) {
+    const wrapper = document.createElement("span");
+    wrapper.className = "cm-task-checkbox";
+
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = this.checked;
+    input.tabIndex = -1;
+    input.ariaLabel = this.checked ? "Mark task incomplete" : "Mark task complete";
+
+    input.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+
+    input.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      view.dispatch({
+        changes: {
+          from: this.from,
+          to: this.from + 3,
+          insert: this.checked ? "[ ]" : "[x]"
+        }
+      });
+    });
+
+    wrapper.append(input);
+    return wrapper;
+  }
+}
+
+class BulletWidget extends WidgetType {
+  eq(widget: WidgetType) {
+    return widget instanceof BulletWidget;
+  }
+
+  toDOM() {
+    const bullet = document.createElement("span");
+    bullet.className = "cm-list-bullet";
+    bullet.textContent = "•";
+    return bullet;
+  }
+}
+
 function updateTicketCount(workspace: WorkspaceInfo | null, projectId: string, delta: number) {
   if (!workspace) {
     return workspace;
@@ -1003,13 +1296,11 @@ function hydrateIcons() {
   createIcons({
     icons: {
       CircleCheck,
-      Eye,
       Folder,
       FolderPlus,
       GripVertical,
       ListTodo,
       LoaderCircle,
-      Pencil,
       Plus,
       RefreshCw,
       Save,
