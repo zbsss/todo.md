@@ -73,6 +73,20 @@ type TicketDraft = {
   status: Status;
 };
 
+type RenderOptions = {
+  preserveScroll?: boolean;
+};
+
+type ScrollSnapshot = {
+  windowX: number;
+  windowY: number;
+  elements: Array<{
+    key: string;
+    scrollLeft: number;
+    scrollTop: number;
+  }>;
+};
+
 const columns: Array<{ id: Status; label: string; icon: string }> = [
   { id: "todo", label: "To do", icon: "list-todo" },
   { id: "doing", label: "Doing", icon: "loader-circle" },
@@ -161,7 +175,9 @@ async function loadTickets(projectId: string) {
   state.tickets.sort(sortTickets);
 }
 
-function render() {
+function render(options: RenderOptions = {}) {
+  const scrollSnapshot = options.preserveScroll ? captureScrollSnapshot() : null;
+
   destroyMarkdownEditor();
 
   const workspace = state.workspace;
@@ -223,6 +239,7 @@ function render() {
 
   hydrateIcons();
   bindEvents();
+  restoreScrollSnapshot(scrollSnapshot);
 }
 
 function renderProjects(projects: ProjectSummary[]) {
@@ -784,14 +801,14 @@ function openProjectMenu(projectId: string, x: number, y: number) {
     x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
     y: Math.max(8, Math.min(y, window.innerHeight - menuHeight - 8))
   };
-  render();
+  render({ preserveScroll: true });
 }
 
 function closeProjectMenu(options: { shouldRender?: boolean } = {}) {
   state.projectMenu = null;
 
   if (options.shouldRender !== false) {
-    render();
+    render({ preserveScroll: true });
   }
 }
 
@@ -805,14 +822,14 @@ function openTicketMenu(ticketId: string, x: number, y: number) {
     x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
     y: Math.max(8, Math.min(y, window.innerHeight - menuHeight - 8))
   };
-  render();
+  render({ preserveScroll: true });
 }
 
 function closeTicketMenu(options: { shouldRender?: boolean } = {}) {
   state.ticketMenu = null;
 
   if (options.shouldRender !== false) {
-    render();
+    render({ preserveScroll: true });
   }
 }
 
@@ -821,7 +838,7 @@ function closeContextMenus(options: { shouldRender?: boolean } = {}) {
   state.ticketMenu = null;
 
   if (options.shouldRender !== false) {
-    render();
+    render({ preserveScroll: true });
   }
 }
 
@@ -1506,6 +1523,95 @@ function findTicketCard(ticketId: string, root: ParentNode = document) {
 
 function focusTicket(ticketId: string) {
   findTicketCard(ticketId)?.focus();
+}
+
+function captureScrollSnapshot(): ScrollSnapshot {
+  return {
+    windowX: window.scrollX,
+    windowY: window.scrollY,
+    elements: Array.from(
+      document.querySelectorAll<HTMLElement>(".project-list, .workspace, .board, .ticket-list[data-status]")
+    ).flatMap((element) => {
+      const key = scrollSnapshotKey(element);
+
+      if (!key) {
+        return [];
+      }
+
+      return [
+        {
+          key,
+          scrollLeft: element.scrollLeft,
+          scrollTop: element.scrollTop
+        }
+      ];
+    })
+  };
+}
+
+function restoreScrollSnapshot(snapshot: ScrollSnapshot | null) {
+  if (!snapshot) {
+    return;
+  }
+
+  snapshot.elements.forEach((position) => {
+    const element = scrollSnapshotElement(position.key);
+
+    if (!element) {
+      return;
+    }
+
+    element.scrollLeft = position.scrollLeft;
+    element.scrollTop = Math.min(position.scrollTop, Math.max(0, element.scrollHeight - element.clientHeight));
+  });
+
+  window.scrollTo(snapshot.windowX, snapshot.windowY);
+}
+
+function scrollSnapshotKey(element: HTMLElement) {
+  if (element.classList.contains("ticket-list") && element.dataset.status) {
+    return `ticket-list:${element.dataset.status}`;
+  }
+
+  if (element.classList.contains("project-list")) {
+    return "project-list";
+  }
+
+  if (element.classList.contains("workspace")) {
+    return "workspace";
+  }
+
+  if (element.classList.contains("board")) {
+    return "board";
+  }
+
+  return null;
+}
+
+function scrollSnapshotElement(key: string) {
+  if (key.startsWith("ticket-list:")) {
+    const status = key.slice("ticket-list:".length);
+
+    return (
+      Array.from(document.querySelectorAll<HTMLElement>(".ticket-list[data-status]")).find(
+        (element) => element.dataset.status === status
+      ) ?? null
+    );
+  }
+
+  if (key === "project-list") {
+    return document.querySelector<HTMLElement>(".project-list");
+  }
+
+  if (key === "workspace") {
+    return document.querySelector<HTMLElement>(".workspace");
+  }
+
+  if (key === "board") {
+    return document.querySelector<HTMLElement>(".board");
+  }
+
+  return null;
 }
 
 function renumberTickets(tickets: Ticket[]) {
