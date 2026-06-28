@@ -168,6 +168,7 @@ const draftAutosaveDelayMs = 700;
 const draftAutosaveRetryDelayMs = 5000;
 let draftAutosaveTimer: ReturnType<typeof window.setTimeout> | null = null;
 let draftSavePromise: Promise<void> | null = null;
+let draftSaveRunId = 0;
 let isClosingWindow = false;
 
 async function main() {
@@ -1437,6 +1438,7 @@ async function saveDraft(options: SaveDraftOptions = {}) {
   }
 
   const savePromise = persistCurrentDraft();
+  const saveRunId = ++draftSaveRunId;
   draftSavePromise = savePromise;
   let saved = false;
 
@@ -1448,7 +1450,7 @@ async function saveDraft(options: SaveDraftOptions = {}) {
     scheduleDraftSave(draftAutosaveRetryDelayMs);
     return false;
   } finally {
-    if (draftSavePromise === savePromise) {
+    if (draftSaveRunId === saveRunId) {
       draftSavePromise = null;
     }
   }
