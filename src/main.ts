@@ -406,6 +406,10 @@ function renderColumn(column: { id: Status; label: string; icon: string }) {
 
 function renderTicketCard(ticket: Ticket) {
   const renderedBody = renderMarkdown(ticket.body, { compact: true });
+  const columnTickets = ticketsFor(ticket.status);
+  const columnIndex = columnTickets.findIndex((candidate) => candidate.id === ticket.id);
+  const canMoveUp = columnIndex > 0;
+  const canMoveDown = columnIndex > -1 && columnIndex < columnTickets.length - 1;
 
   return `
     <article
@@ -417,7 +421,27 @@ function renderTicketCard(ticket: Ticket) {
     >
       <div class="ticket-topline">
         <h4>${escapeHtml(ticket.title)}</h4>
-        <span>${icon("grip-vertical")}</span>
+        <div class="ticket-actions">
+          <button
+            class="ticket-move-button"
+            data-ticket-action="move-up"
+            aria-label="Move ${escapeAttr(ticket.title)} up"
+            title="Move up"
+            ${canMoveUp ? "" : "disabled"}
+          >
+            ${icon("arrow-up")}
+          </button>
+          <button
+            class="ticket-move-button"
+            data-ticket-action="move-down"
+            aria-label="Move ${escapeAttr(ticket.title)} down"
+            title="Move down"
+            ${canMoveDown ? "" : "disabled"}
+          >
+            ${icon("arrow-down")}
+          </button>
+          <span class="drag-handle" title="Drag to reorder">${icon("grip-vertical")}</span>
+        </div>
       </div>
       ${renderedBody ? `<div class="markdown card-markdown">${renderedBody}</div>` : ""}
     </article>
@@ -975,8 +999,15 @@ function bindTicketEvents() {
     });
 
   document.querySelectorAll<HTMLElement>(".ticket-card").forEach((card) => {
-    card.addEventListener("click", () => {
+    card.addEventListener("click", (event) => {
+      const actionButton = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-ticket-action]");
       const ticketId = card.dataset.ticketId;
+
+      if (actionButton?.dataset.ticketAction && ticketId) {
+        event.stopPropagation();
+        void moveTicketWithinColumn(ticketId, actionButton.dataset.ticketAction as MoveDirection);
+        return;
+      }
 
       if (ticketId) {
         openEditor(ticketId);
@@ -984,6 +1015,10 @@ function bindTicketEvents() {
     });
 
     card.addEventListener("keydown", (event) => {
+      if (event.target !== card) {
+        return;
+      }
+
       if (event.key === "Enter") {
         const ticketId = card.dataset.ticketId;
 
@@ -1008,6 +1043,7 @@ function bindTicketEvents() {
 
     card.addEventListener("dragend", () => {
       state.draggingId = null;
+      clearDropIndicators();
       document
         .querySelectorAll(".is-dragging, .is-drag-over")
         .forEach((node) => node.classList.remove("is-dragging", "is-drag-over"));
@@ -1024,12 +1060,20 @@ function bindTicketEvents() {
       if (event.dataTransfer) {
         event.dataTransfer.dropEffect = "move";
       }
-      column.querySelector(".ticket-list")?.classList.add("is-drag-over");
+
+      const list = column.querySelector<HTMLElement>(".ticket-list");
+      if (!list) {
+        return;
+      }
+
+      list.classList.add("is-drag-over");
+      updateDropIndicator(list, getInsertionBeforeId(list, event.clientY));
     });
 
     column.addEventListener("dragleave", (event) => {
       if (!column.contains(event.relatedTarget as Node | null)) {
         column.querySelector(".ticket-list")?.classList.remove("is-drag-over");
+        clearDropIndicators();
       }
     });
 
@@ -1039,13 +1083,14 @@ function bindTicketEvents() {
 
       const ticketId = event.dataTransfer?.getData(ticketDragType) || state.draggingId;
       const status = column.dataset.status as Status;
-      const targetCard = (event.target as HTMLElement).closest<HTMLElement>(".ticket-card");
-      const beforeId = targetCard?.dataset.ticketId;
+      const list = column.querySelector<HTMLElement>(".ticket-list");
+      const beforeId = list ? getInsertionBeforeId(list, event.clientY) : undefined;
 
       if (!ticketId || !status) {
         return;
       }
 
+      clearDropIndicators();
       await moveTicket(ticketId, status, beforeId);
     });
   });
@@ -1258,11 +1303,42 @@ async function moveTicket(ticketId: string, status: Status, beforeId?: string) {
   }
 }
 
+type MoveDirection = "move-up" | "move-down";
+
+async function moveTicketWithinColumn(ticketId: string, direction: MoveDirection) {
+  const ticket = state.tickets.find((candidate) => candidate.id === ticketId);
+
+  if (!ticket) {
+    return;
+  }
+
+  const columnTickets = ticketsFor(ticket.status);
+  const index = columnTickets.findIndex((candidate) => candidate.id === ticketId);
+
+  if (index === -1) {
+    return;
+  }
+
+  const beforeId =
+    direction === "move-up" ? columnTickets[index - 1]?.id : columnTickets[index + 2]?.id;
+
+  if (direction === "move-up" && !beforeId) {
+    return;
+  }
+
+  if (direction === "move-down" && index >= columnTickets.length - 1) {
+    return;
+  }
+
+  await moveTicket(ticketId, ticket.status, beforeId);
+  focusTicket(ticketId);
+}
+
 function insertTicket(tickets: Ticket[], ticket: Ticket, status: Status, beforeId?: string) {
   const next: Ticket[] = [];
   let inserted = false;
 
-  for (const candidate of tickets.sort(sortTickets)) {
+  for (const candidate of [...tickets].sort(sortTickets)) {
     if (candidate.status === status && beforeId && candidate.id === beforeId) {
       next.push(ticket);
       inserted = true;
@@ -1278,13 +1354,55 @@ function insertTicket(tickets: Ticket[], ticket: Ticket, status: Status, beforeI
   return next;
 }
 
+function getInsertionBeforeId(list: HTMLElement, pointerY: number) {
+  const cards = Array.from(list.querySelectorAll<HTMLElement>(".ticket-card:not(.is-dragging)"));
+
+  for (const card of cards) {
+    const rect = card.getBoundingClientRect();
+
+    if (pointerY < rect.top + rect.height / 2) {
+      return card.dataset.ticketId;
+    }
+  }
+
+  return undefined;
+}
+
+function updateDropIndicator(list: HTMLElement, beforeId?: string) {
+  clearDropIndicators();
+
+  if (beforeId) {
+    findTicketCard(beforeId, list)?.classList.add("is-drop-before");
+    return;
+  }
+
+  list.classList.add("is-drop-at-end");
+}
+
+function clearDropIndicators() {
+  document
+    .querySelectorAll(".is-drop-before, .is-drop-at-end")
+    .forEach((node) => node.classList.remove("is-drop-before", "is-drop-at-end"));
+}
+
+function findTicketCard(ticketId: string, root: ParentNode = document) {
+  return (
+    Array.from(root.querySelectorAll<HTMLElement>(".ticket-card")).find(
+      (card) => card.dataset.ticketId === ticketId
+    ) ?? null
+  );
+}
+
+function focusTicket(ticketId: string) {
+  findTicketCard(ticketId)?.focus();
+}
+
 function renumberTickets(tickets: Ticket[]) {
   const nextPositions: Array<{ id: string; status: Status; order: number }> = [];
 
   for (const status of columns.map((column) => column.id)) {
     tickets
       .filter((ticket) => ticket.status === status)
-      .sort(sortTickets)
       .forEach((ticket, index) => {
         ticket.order = (index + 1) * 1000;
         nextPositions.push({

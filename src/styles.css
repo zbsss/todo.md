@@ -175,7 +175,8 @@ select:focus {
 .ghost-button,
 .save-button,
 .sidebar-action,
-.project-item {
+.project-item,
+.ticket-move-button {
   border: 0;
 }
 
@@ -230,7 +231,6 @@ select:focus {
 .project-drag-icon svg,
 .column-icon svg,
 .ticket-topline svg,
-.mode-tabs svg,
 .project-context-menu svg {
   width: 18px;
   height: 18px;
@@ -544,6 +544,23 @@ select:focus {
   outline-offset: 2px;
 }
 
+.ticket-list.is-drop-at-end::after,
+.ticket-card.is-drop-before::before {
+  display: block;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  content: "";
+}
+
+.ticket-list.is-drop-at-end::after {
+  flex: 0 0 auto;
+}
+
+.ticket-card.is-drop-before::before {
+  margin-bottom: 10px;
+}
+
 .ticket-card {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -572,7 +589,7 @@ select:focus {
 
 .ticket-topline {
   display: grid;
-  grid-template-columns: 1fr 18px;
+  grid-template-columns: 1fr auto;
   gap: 8px;
   align-items: start;
 }
@@ -583,7 +600,43 @@ select:focus {
   line-height: 1.28;
 }
 
-.ticket-topline span {
+.ticket-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.ticket-move-button {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 7px;
+  background: transparent;
+  color: #777167;
+  padding: 0;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.ticket-move-button:hover:not(:disabled),
+.ticket-move-button:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  outline: none;
+}
+
+.ticket-move-button:disabled {
+  cursor: default;
+  opacity: 0.28;
+}
+
+.drag-handle {
+  display: grid;
+  width: 18px;
+  height: 24px;
+  place-items: center;
   color: #9a958b;
 }
 
