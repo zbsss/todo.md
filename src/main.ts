@@ -1510,7 +1510,7 @@ async function bindWindowCloseGuards() {
 
       if (await saveDraft({ flush: true })) {
         isClosingWindow = true;
-        await appWindow.close();
+        await appWindow.destroy();
       }
     });
   } else {
