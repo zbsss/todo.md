@@ -18,7 +18,7 @@ import {
   type ViewUpdate,
   WidgetType
 } from "@codemirror/view";
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import {
   ArrowDown,
@@ -71,6 +71,19 @@ type TicketDraft = {
   title: string;
   body: string;
   status: Status;
+  pastedImages: string[];
+};
+
+type SavedTicketImage = {
+  markdownPath: string;
+  filePath: string;
+  alt: string;
+};
+
+type MarkdownRenderOptions = {
+  compact?: boolean;
+  skipImages?: boolean;
+  projectPath?: string;
 };
 
 const columns: Array<{ id: Status; label: string; icon: string }> = [
@@ -88,6 +101,7 @@ if (!app) {
 const appRoot = app;
 const ticketDragType = "application/x-todo-md-ticket";
 const projectDragType = "application/x-todo-md-project";
+const maxPastedImageBytes = 25 * 1024 * 1024;
 
 const state: {
   workspace: WorkspaceInfo | null;
@@ -119,6 +133,7 @@ const state: {
 
 const isTauriRuntime = "__TAURI_INTERNALS__" in window;
 let markdownEditorView: EditorView | null = null;
+const pendingImageUploads = new Set<Promise<void>>();
 
 async function main() {
   bindGlobalKeys();
@@ -405,7 +420,11 @@ function renderColumn(column: { id: Status; label: string; icon: string }) {
 }
 
 function renderTicketCard(ticket: Ticket) {
-  const renderedBody = renderMarkdown(ticket.body, { compact: true });
+  const renderedBody = renderMarkdown(ticket.body, {
+    compact: true,
+    skipImages: true,
+    projectPath: getCurrentProject()?.path
+  });
 
   return `
     <article
@@ -1163,7 +1182,8 @@ function openEditor(ticketId: string) {
     id: ticket.id,
     title: ticket.title,
     body: ticket.body,
-    status: ticket.status
+    status: ticket.status,
+    pastedImages: []
   };
   render();
   document.querySelector<HTMLInputElement>("#editor-title")?.focus();
@@ -1186,7 +1206,20 @@ async function confirmDiscardDraft() {
     return true;
   }
 
-  return confirmAction("Discard unsaved changes?", "Unsaved changes");
+  const confirmed = await confirmAction("Discard unsaved changes?", "Unsaved changes");
+
+  if (!confirmed) {
+    return false;
+  }
+
+  try {
+    await waitForPendingImageUploads();
+    await cleanupDraftImages();
+    return true;
+  } catch (error) {
+    showError(error);
+    return false;
+  }
 }
 
 async function confirmAction(message: string, title: string) {
@@ -1207,16 +1240,22 @@ function hasUnsavedDraft() {
   return (
     ticket.title !== state.draft.title ||
     ticket.body !== state.draft.body ||
-    ticket.status !== state.draft.status
+    ticket.status !== state.draft.status ||
+    state.draft.pastedImages.length > 0
   );
 }
 
 async function saveDraft() {
+  await waitForPendingImageUploads();
+
   if (!state.selectedProjectId || !state.draft) {
     return;
   }
 
   try {
+    const unusedImages = unusedDraftImages(state.draft);
+    await cleanupTicketImages(state.selectedProjectId, unusedImages);
+
     const updated = await api.updateTicket(
       state.selectedProjectId,
       state.draft.id,
@@ -1244,6 +1283,8 @@ async function deleteSelectedTicket() {
   }
 
   try {
+    await waitForPendingImageUploads();
+    await cleanupDraftImages();
     await api.deleteTicket(state.selectedProjectId, ticket.id);
     state.tickets = state.tickets.filter((candidate) => candidate.id !== ticket.id);
     state.workspace = updateTicketCount(state.workspace, state.selectedProjectId, -1);
@@ -1251,6 +1292,34 @@ async function deleteSelectedTicket() {
   } catch (error) {
     showError(error);
   }
+}
+
+async function cleanupDraftImages() {
+  if (!state.selectedProjectId || !state.draft?.pastedImages.length) {
+    return;
+  }
+
+  const projectId = state.selectedProjectId;
+  const imagePaths = [...state.draft.pastedImages];
+
+  state.draft.pastedImages = [];
+
+  try {
+    await cleanupTicketImages(projectId, imagePaths);
+  } catch (error) {
+    if (state.draft) {
+      state.draft.pastedImages = imagePaths;
+    }
+    throw error;
+  }
+}
+
+async function cleanupTicketImages(projectId: string, imagePaths: string[]) {
+  await Promise.all(imagePaths.map((imagePath) => api.deleteTicketImage(projectId, imagePath)));
+}
+
+function unusedDraftImages(draft: TicketDraft) {
+  return draft.pastedImages.filter((imagePath) => !draft.body.includes(`](${imagePath})`));
 }
 
 async function moveTicket(ticketId: string, status: Status, beforeId?: string) {
@@ -1397,6 +1466,10 @@ function getSelectedTicket() {
   return state.tickets.find((ticket) => ticket.id === state.selectedTicketId) ?? null;
 }
 
+function getCurrentProject() {
+  return state.selectedProjectId ? getProject(state.selectedProjectId) : null;
+}
+
 function getProject(projectId: string) {
   return state.workspace?.projects.find((project) => project.id === projectId) ?? null;
 }
@@ -1451,6 +1524,19 @@ function mountMarkdownEditor(parent: HTMLElement, value: string) {
         keymap.of([...markdownKeymap, ...historyKeymap, ...defaultKeymap]),
         inlineMarkdownDecorations,
         placeholder("Start writing..."),
+        EditorView.domEventHandlers({
+          paste(event, view) {
+            const image = imageFileFromPaste(event);
+
+            if (!image) {
+              return false;
+            }
+
+            event.preventDefault();
+            trackPendingImageUpload(pasteImageIntoEditor(image, view));
+            return true;
+          }
+        }),
         EditorView.lineWrapping,
         EditorView.updateListener.of((update) => {
           if (update.docChanged && state.draft) {
@@ -1465,6 +1551,164 @@ function mountMarkdownEditor(parent: HTMLElement, value: string) {
 function destroyMarkdownEditor() {
   markdownEditorView?.destroy();
   markdownEditorView = null;
+}
+
+type PastedImage = {
+  file: File;
+  mimeType: string;
+};
+
+function imageFileFromPaste(event: ClipboardEvent): PastedImage | null {
+  const clipboardData = event.clipboardData;
+  const items = Array.from(clipboardData?.items ?? []);
+
+  for (const item of items) {
+    if (item.kind !== "file") {
+      continue;
+    }
+
+    const file = item.getAsFile();
+    const mimeType = file?.type || item.type;
+
+    if (file && mimeType.startsWith("image/") && imageExtensionForMime(mimeType)) {
+      return {
+        file,
+        mimeType
+      };
+    }
+  }
+
+  for (const file of Array.from(clipboardData?.files ?? [])) {
+    if (file.type.startsWith("image/") && imageExtensionForMime(file.type)) {
+      return {
+        file,
+        mimeType: file.type
+      };
+    }
+  }
+
+  return null;
+}
+
+async function pasteImageIntoEditor(image: PastedImage, view: EditorView) {
+  const projectId = state.selectedProjectId;
+  const draftId = state.draft?.id;
+
+  if (!projectId || !draftId) {
+    return;
+  }
+
+  if (image.file.size > maxPastedImageBytes) {
+    showError(new Error("Image is too large."));
+    return;
+  }
+
+  const placeholderMarkdown = `![Pasted image](todo-md-paste-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)})`;
+  insertMarkdownAtSelection(view, placeholderMarkdown);
+
+  try {
+    const buffer = await image.file.arrayBuffer();
+    const bytes = Array.from(new Uint8Array(buffer));
+    const saved = await api.saveTicketImage(projectId, draftId, image.mimeType, bytes);
+
+    if (markdownEditorView !== view || state.selectedProjectId !== projectId || state.draft?.id !== draftId) {
+      await api.deleteTicketImage(projectId, saved.markdownPath);
+      return;
+    }
+
+    const inserted = replaceMarkdownInEditor(
+      view,
+      placeholderMarkdown,
+      `![${saved.alt}](${saved.markdownPath})`
+    );
+
+    if (!inserted) {
+      await api.deleteTicketImage(projectId, saved.markdownPath);
+      return;
+    }
+
+    state.draft.pastedImages.push(saved.markdownPath);
+  } catch (error) {
+    removeMarkdownFromEditor(view, placeholderMarkdown);
+    showError(error);
+  }
+}
+
+function trackPendingImageUpload(upload: Promise<void>) {
+  pendingImageUploads.add(upload);
+  upload.finally(() => {
+    pendingImageUploads.delete(upload);
+  });
+}
+
+async function waitForPendingImageUploads() {
+  while (pendingImageUploads.size) {
+    await Promise.allSettled(Array.from(pendingImageUploads));
+  }
+}
+
+function insertMarkdownAtSelection(view: EditorView, markdown: string) {
+  const selection = view.state.selection.main;
+  const startsAtLineStart =
+    selection.from === 0 || view.state.doc.sliceString(selection.from - 1, selection.from) === "\n";
+  const endsAtLineEnd =
+    selection.to === view.state.doc.length || view.state.doc.sliceString(selection.to, selection.to + 1) === "\n";
+  const prefix = startsAtLineStart ? "" : "\n";
+  const suffix = endsAtLineEnd ? "" : "\n";
+  const insert = `${prefix}${markdown}${suffix}`;
+
+  view.dispatch({
+    changes: {
+      from: selection.from,
+      to: selection.to,
+      insert
+    },
+    selection: {
+      anchor: selection.from + insert.length
+    },
+    scrollIntoView: true
+  });
+  view.focus();
+}
+
+function replaceMarkdownInEditor(view: EditorView, currentMarkdown: string, nextMarkdown: string) {
+  const position = view.state.doc.toString().indexOf(currentMarkdown);
+
+  if (position === -1) {
+    return false;
+  }
+
+  view.dispatch({
+    changes: {
+      from: position,
+      to: position + currentMarkdown.length,
+      insert: nextMarkdown
+    },
+    selection: {
+      anchor: position + nextMarkdown.length
+    },
+    scrollIntoView: true
+  });
+  view.focus();
+  return true;
+}
+
+function removeMarkdownFromEditor(view: EditorView, markdown: string) {
+  const position = view.state.doc.toString().indexOf(markdown);
+
+  if (position === -1) {
+    return;
+  }
+
+  view.dispatch({
+    changes: {
+      from: position,
+      to: position + markdown.length,
+      insert: ""
+    }
+  });
 }
 
 const inlineMarkdownDecorations = ViewPlugin.fromClass(
@@ -1605,6 +1849,8 @@ function decorateInlineMarkdown(
   isActive: boolean
 ) {
   const protectedRanges: Array<{ from: number; to: number }> = [];
+  const lineContainsOnlyImages = text.replace(/!\[([^\]\n]*)\]\(([^)\s]+)\)/g, "").trim() === "";
+  let decoratedImageLine = false;
 
   for (const match of text.matchAll(/`([^`\n]+)`/g)) {
     const from = lineFrom + (match.index ?? 0);
@@ -1644,6 +1890,43 @@ function decorateInlineMarkdown(
     decorations.push(Decoration.mark({ class: "cm-md-emphasis" }).range(contentFrom, contentTo));
     hideMarkdownRange(decorations, markerFrom, contentFrom, isActive);
     hideMarkdownRange(decorations, contentTo, contentTo + 1, isActive);
+  }
+
+  for (const match of text.matchAll(/!\[([^\]\n]*)\]\(([^)\s]+)\)/g)) {
+    const from = lineFrom + (match.index ?? 0);
+    const labelFrom = from + 2;
+    const labelTo = labelFrom + match[1].length;
+    const to = from + match[0].length;
+
+    if (overlapsProtectedRange(from, to, protectedRanges)) {
+      continue;
+    }
+
+    const src = resolveMarkdownImageSrc(match[2], getCurrentProject()?.path);
+
+    if (!src) {
+      continue;
+    }
+
+    protectedRanges.push({ from, to });
+
+    if (isActive) {
+      if (labelFrom < labelTo) {
+        decorations.push(Decoration.mark({ class: "cm-md-link" }).range(labelFrom, labelTo));
+      }
+      continue;
+    }
+
+    if (lineContainsOnlyImages && !decoratedImageLine) {
+      decorations.push(Decoration.line({ class: "cm-md-image-line" }).range(lineFrom));
+      decoratedImageLine = true;
+    }
+
+    decorations.push(
+      Decoration.replace({
+        widget: new MarkdownImageWidget(src, match[1] || "Pasted image")
+      }).range(from, to)
+    );
   }
 
   for (const match of text.matchAll(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g)) {
@@ -1734,6 +2017,32 @@ class BulletWidget extends WidgetType {
   }
 }
 
+class MarkdownImageWidget extends WidgetType {
+  constructor(
+    private src: string,
+    private alt: string
+  ) {
+    super();
+  }
+
+  eq(widget: WidgetType) {
+    return widget instanceof MarkdownImageWidget && widget.src === this.src && widget.alt === this.alt;
+  }
+
+  toDOM() {
+    const wrapper = document.createElement("span");
+    wrapper.className = "cm-markdown-image";
+
+    const image = document.createElement("img");
+    image.src = this.src;
+    image.alt = this.alt;
+    image.loading = "lazy";
+
+    wrapper.append(image);
+    return wrapper;
+  }
+}
+
 function updateTicketCount(workspace: WorkspaceInfo | null, projectId: string, delta: number) {
   if (!workspace) {
     return workspace;
@@ -1749,7 +2058,7 @@ function updateTicketCount(workspace: WorkspaceInfo | null, projectId: string, d
   };
 }
 
-function renderMarkdown(markdown: string, options: { compact?: boolean } = {}) {
+function renderMarkdown(markdown: string, options: MarkdownRenderOptions = {}) {
   const lines = markdown.trim().split("\n");
 
   if (!markdown.trim()) {
@@ -1767,7 +2076,12 @@ function renderMarkdown(markdown: string, options: { compact?: boolean } = {}) {
       return;
     }
 
-    html.push(`<p>${renderInline(paragraph.join(" "))}</p>`);
+    const renderedParagraph = renderInline(paragraph.join(" "), options).trim();
+
+    if (renderedParagraph) {
+      html.push(`<p>${renderedParagraph}</p>`);
+    }
+
     paragraph = [];
   };
 
@@ -1811,7 +2125,7 @@ function renderMarkdown(markdown: string, options: { compact?: boolean } = {}) {
       flushParagraph();
       closeList();
       const level = heading[1].length + 2;
-      html.push(`<h${level}>${renderInline(heading[2])}</h${level}>`);
+      html.push(`<h${level}>${renderInline(heading[2], options)}</h${level}>`);
       continue;
     }
 
@@ -1820,7 +2134,7 @@ function renderMarkdown(markdown: string, options: { compact?: boolean } = {}) {
     if (quote && !options.compact) {
       flushParagraph();
       closeList();
-      html.push(`<blockquote>${renderInline(quote[1])}</blockquote>`);
+      html.push(`<blockquote>${renderInline(quote[1], options)}</blockquote>`);
       continue;
     }
 
@@ -1840,7 +2154,12 @@ function renderMarkdown(markdown: string, options: { compact?: boolean } = {}) {
         list = nextList;
       }
 
-      html.push(`<li>${renderInline((unordered ?? ordered)?.[1] ?? "")}</li>`);
+      const renderedItem = renderInline((unordered ?? ordered)?.[1] ?? "", options).trim();
+
+      if (renderedItem) {
+        html.push(`<li>${renderedItem}</li>`);
+      }
+
       continue;
     }
 
@@ -1858,7 +2177,7 @@ function renderMarkdown(markdown: string, options: { compact?: boolean } = {}) {
   return options.compact ? html.slice(0, 2).join("") : html.join("");
 }
 
-function renderInline(value: string) {
+function renderInline(value: string, options: MarkdownRenderOptions = {}) {
   const placeholders: string[] = [];
   let html = escapeHtml(value);
 
@@ -1869,9 +2188,25 @@ function renderInline(value: string) {
   });
 
   html = html
+    .replace(/!\[([^\]\n]*)\]\(([^)\s]+)\)/g, (match, alt: string, src: string) => {
+      if (options.skipImages) {
+        return "";
+      }
+
+      const imageSrc = resolveMarkdownImageSrc(src, options.projectPath);
+
+      if (!imageSrc) {
+        return match;
+      }
+
+      return `<img src="${escapeAttr(imageSrc)}" alt="${alt}" loading="lazy" />`;
+    })
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\*([^*]+)\*/g, "<em>$1</em>")
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
+    .replace(
+      /(^|[^!])\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+      '$1<a href="$3" target="_blank" rel="noreferrer">$2</a>'
+    )
     .replace(/\[ \]\s+/g, '<input type="checkbox" disabled /> ')
     .replace(/\[x\]\s+/gi, '<input type="checkbox" checked disabled /> ');
 
@@ -1931,6 +2266,84 @@ function shortPath(path: string) {
   }
 
   return `.../${parts.slice(-3).join("/")}`;
+}
+
+function resolveMarkdownImageSrc(src: string, projectPath?: string) {
+  const trimmed = src.trim();
+
+  if (/^https?:\/\//i.test(trimmed) || /^data:image\//i.test(trimmed)) {
+    return trimmed;
+  }
+
+  const relativePath = normalizeTaskImagePath(trimmed);
+
+  if (!relativePath || !projectPath) {
+    return null;
+  }
+
+  if (!isTauriRuntime) {
+    return relativePath;
+  }
+
+  return convertFileSrc(joinFilePath(projectPath, ".tasks", relativePath));
+}
+
+function normalizeTaskImagePath(path: string) {
+  const normalized = path.replaceAll("\\", "/").replace(/^\.\//, "");
+  const relativePath = normalized.startsWith(".tasks/images/")
+    ? normalized.slice(".tasks/".length)
+    : normalized;
+  const parts = relativePath.split("/");
+
+  if (parts.length < 2 || parts[0] !== "images") {
+    return null;
+  }
+
+  if (parts.some((part) => !part || part === "." || part === "..")) {
+    return null;
+  }
+
+  return relativePath;
+}
+
+function joinFilePath(base: string, ...segments: string[]) {
+  const separator = base.includes("\\") && !base.includes("/") ? "\\" : "/";
+  const normalizedSegments = segments.map((segment) =>
+    segment
+      .replaceAll("\\", separator)
+      .replaceAll("/", separator)
+      .replace(/^[\\/]+|[\\/]+$/g, "")
+  );
+
+  return [base.replace(/[\\/]+$/, ""), ...normalizedSegments].join(separator);
+}
+
+function imageExtensionForMime(mimeType: string) {
+  switch (mimeType.split(";")[0].trim().toLowerCase()) {
+    case "image/png":
+      return "png";
+    case "image/jpeg":
+      return "jpg";
+    case "image/gif":
+      return "gif";
+    case "image/webp":
+      return "webp";
+    case "image/bmp":
+      return "bmp";
+    default:
+      return null;
+  }
+}
+
+function bytesToDataUrl(mimeType: string, bytes: number[]) {
+  const chunkSize = 0x8000;
+  let binary = "";
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize));
+  }
+
+  return `data:${mimeType};base64,${btoa(binary)}`;
 }
 
 async function copyText(value: string) {
@@ -2031,6 +2444,20 @@ const api = {
     }
 
     return mockStore.updateTicket(projectId, ticketId, title, body, status);
+  },
+  async saveTicketImage(projectId: string, ticketId: string, mimeType: string, bytes: number[]) {
+    if (isTauriRuntime) {
+      return invoke<SavedTicketImage>("save_ticket_image", { projectId, ticketId, mimeType, bytes });
+    }
+
+    return mockStore.saveTicketImage(projectId, ticketId, mimeType, bytes);
+  },
+  async deleteTicketImage(projectId: string, markdownPath: string) {
+    if (isTauriRuntime) {
+      return invoke<void>("delete_ticket_image", { projectId, markdownPath });
+    }
+
+    return mockStore.deleteTicketImage(projectId, markdownPath);
   },
   async reorderTickets(projectId: string, positions: Array<{ id: string; status: Status; order: number }>) {
     if (isTauriRuntime) {
@@ -2264,6 +2691,31 @@ const mockStore = (() => {
       }
 
       return updated;
+    },
+    async saveTicketImage(projectId: string, ticketId: string, mimeType: string, bytes: number[]) {
+      const store = read();
+      const project = store.workspace.projects.find((candidate) => candidate.id === projectId);
+      const ticket = store.tickets[projectId]?.find((candidate) => candidate.id === ticketId);
+      const extension = imageExtensionForMime(mimeType);
+
+      if (!project || !ticket) {
+        throw new Error("Ticket not found.");
+      }
+
+      if (!extension) {
+        throw new Error("Unsupported image type.");
+      }
+
+      const fileName = `${Date.now()}-${ticketId}.${extension}`;
+
+      return {
+        markdownPath: bytesToDataUrl(mimeType, bytes),
+        filePath: `${project.path}/.tasks/images/${fileName}`,
+        alt: "Pasted image"
+      };
+    },
+    async deleteTicketImage(_projectId: string, _markdownPath: string) {
+      return;
     },
     async reorderTickets(projectId: string, positions: Array<{ id: string; status: Status; order: number }>) {
       const store = read();

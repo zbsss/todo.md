@@ -10,6 +10,8 @@ use tauri::{AppHandle, Manager};
 
 const STATUSES: [&str; 3] = ["todo", "doing", "done"];
 const TASKS_DIR: &str = ".tasks";
+const TASKS_STORAGE_MARKER: &str = ".todo-md-storage";
+const MAX_IMAGE_BYTES: usize = 25 * 1024 * 1024;
 const PROJECT_META_DIR: &str = ".todo.md";
 const LEGACY_PROJECT_META_DIR: &str = ".todo-md";
 
@@ -67,6 +69,14 @@ struct Ticket {
     file_path: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SavedTicketImage {
+    markdown_path: String,
+    file_path: String,
+    alt: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TicketPosition {
@@ -97,6 +107,7 @@ fn create_project(app: AppHandle, name: String) -> Result<ProjectSummary, String
     let mut registry = load_project_registry(&app)?;
     let project = create_project_record(&mut registry, &default_projects_dir, &name)?;
 
+    allow_project_image_assets(&app, Path::new(&project.path))?;
     save_project_registry(&app, &registry)?;
     Ok(project)
 }
@@ -158,6 +169,7 @@ fn import_project(app: AppHandle, path: String) -> Result<ProjectSummary, String
 
     registry.projects.push(record.clone());
     save_project_registry(&app, &registry)?;
+    allow_project_image_assets(&app, &project_path)?;
     project_summary(&record)
 }
 
@@ -232,6 +244,7 @@ fn open_project_folder(app: AppHandle, project_id: String) -> Result<(), String>
 #[tauri::command]
 fn list_tickets(app: AppHandle, project_id: String) -> Result<Vec<Ticket>, String> {
     let project_dir = project_dir(&app, &project_id)?;
+    allow_project_image_assets(&app, &project_dir)?;
     list_tickets_from_disk(&project_dir)
 }
 
@@ -281,6 +294,33 @@ fn update_ticket(
     ticket.updated_at = now_millis();
 
     write_ticket(&project_dir, ticket)
+}
+
+#[tauri::command]
+fn save_ticket_image(
+    app: AppHandle,
+    project_id: String,
+    ticket_id: String,
+    mime_type: String,
+    bytes: Vec<u8>,
+) -> Result<SavedTicketImage, String> {
+    let project_dir = project_dir(&app, &project_id)?;
+
+    let saved = save_ticket_image_to_project(&project_dir, &ticket_id, &mime_type, &bytes)?;
+    allow_project_image_assets(&app, &project_dir)?;
+
+    Ok(saved)
+}
+
+#[tauri::command]
+fn delete_ticket_image(
+    app: AppHandle,
+    project_id: String,
+    markdown_path: String,
+) -> Result<(), String> {
+    let project_dir = project_dir(&app, &project_id)?;
+
+    delete_ticket_image_from_project(&project_dir, &markdown_path)
 }
 
 #[tauri::command]
@@ -352,10 +392,15 @@ fn workspace_info_from_registry(
     registry: &ProjectRegistry,
 ) -> Result<WorkspaceInfo, String> {
     let default_projects_dir = default_projects_dir(app)?;
+    let projects = list_projects_from_registry(registry)?;
+
+    for project in &projects {
+        allow_project_image_assets(app, Path::new(&project.path))?;
+    }
 
     Ok(WorkspaceInfo {
         base_dir: default_projects_dir.to_string_lossy().to_string(),
-        projects: list_projects_from_registry(registry)?,
+        projects,
     })
 }
 
@@ -856,6 +901,160 @@ fn ticket_write_path(tasks_dir: &Path, ticket: &Ticket) -> Result<PathBuf, Strin
     ticket_path(tasks_dir, &ticket.id)
 }
 
+fn save_ticket_image_to_project(
+    project_dir: &Path,
+    ticket_id: &str,
+    mime_type: &str,
+    bytes: &[u8],
+) -> Result<SavedTicketImage, String> {
+    if !safe_segment(ticket_id) {
+        return Err("Invalid ticket id.".into());
+    }
+
+    if bytes.is_empty() {
+        return Err("Image data cannot be empty.".into());
+    }
+
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err("Image is too large.".into());
+    }
+
+    let extension = image_extension(mime_type)?;
+    validate_image_bytes(mime_type, bytes)?;
+    read_ticket(project_dir, ticket_id)?;
+
+    let images_dir = image_storage_dir(project_dir)?;
+    fs::create_dir_all(&images_dir).map_err(|err| err.to_string())?;
+
+    let file_stem = format!("{}-{}", now_millis(), ticket_id);
+    let file_name = unique_image_file_name(&images_dir, &file_stem, extension);
+    let image_path = images_dir.join(&file_name);
+
+    fs::write(&image_path, bytes).map_err(|err| err.to_string())?;
+
+    Ok(SavedTicketImage {
+        markdown_path: format!("images/{file_name}"),
+        file_path: image_path.to_string_lossy().to_string(),
+        alt: "Pasted image".to_string(),
+    })
+}
+
+fn delete_ticket_image_from_project(project_dir: &Path, markdown_path: &str) -> Result<(), String> {
+    let file_name = image_file_name_from_markdown_path(markdown_path)?;
+    let image_path = image_storage_dir(project_dir)?.join(file_name);
+
+    match fs::remove_file(image_path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+fn image_storage_dir(project_dir: &Path) -> Result<PathBuf, String> {
+    let tasks_dir = project_dir.join(TASKS_DIR);
+
+    if tasks_dir.exists() && !tasks_dir.is_dir() {
+        return Err(".tasks exists but is not a directory.".into());
+    }
+
+    Ok(project_image_assets_dir(project_dir))
+}
+
+fn project_image_assets_dir(project_dir: &Path) -> PathBuf {
+    project_dir.join(TASKS_DIR).join("images")
+}
+
+fn allow_project_image_assets(app: &AppHandle, project_dir: &Path) -> Result<(), String> {
+    let tasks_dir = project_dir.join(TASKS_DIR);
+
+    if tasks_dir.exists() && !tasks_dir.is_dir() {
+        return Ok(());
+    }
+
+    app.asset_protocol_scope()
+        .allow_directory(project_image_assets_dir(project_dir), true)
+        .map_err(|err| err.to_string())
+}
+
+fn image_file_name_from_markdown_path(markdown_path: &str) -> Result<&str, String> {
+    let Some(file_name) = markdown_path.strip_prefix("images/") else {
+        return Err("Invalid image path.".into());
+    };
+
+    if file_name.is_empty()
+        || file_name.starts_with('.')
+        || file_name.contains('/')
+        || file_name.contains('\\')
+        || file_name.contains("..")
+        || !file_name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+    {
+        return Err("Invalid image path.".into());
+    }
+
+    Ok(file_name)
+}
+
+fn image_extension(mime_type: &str) -> Result<&'static str, String> {
+    match mime_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "image/png" => Ok("png"),
+        "image/jpeg" => Ok("jpg"),
+        "image/gif" => Ok("gif"),
+        "image/webp" => Ok("webp"),
+        "image/bmp" => Ok("bmp"),
+        _ => Err("Unsupported image type.".into()),
+    }
+}
+
+fn validate_image_bytes(mime_type: &str, bytes: &[u8]) -> Result<(), String> {
+    let mime_type = mime_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let is_valid = match mime_type.as_str() {
+        "image/png" => bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]),
+        "image/jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
+        "image/gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
+        "image/webp" => bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP",
+        "image/bmp" => bytes.starts_with(b"BM"),
+        _ => false,
+    };
+
+    if is_valid {
+        Ok(())
+    } else {
+        Err("Image data does not match its type.".into())
+    }
+}
+
+fn unique_image_file_name(images_dir: &Path, file_stem: &str, extension: &str) -> String {
+    let first = format!("{file_stem}.{extension}");
+
+    if !images_dir.join(&first).exists() {
+        return first;
+    }
+
+    for index in 2.. {
+        let candidate = format!("{file_stem}-{index}.{extension}");
+
+        if !images_dir.join(&candidate).exists() {
+            return candidate;
+        }
+    }
+
+    unreachable!()
+}
+
 fn path_belongs_to_ticket_storage(tasks_dir: &Path, ticket_path: &Path) -> Result<bool, String> {
     let tasks_dir = canonical_project_path(tasks_dir)?;
     let Some(parent) = ticket_path.parent() else {
@@ -975,17 +1174,38 @@ fn unique_ticket_id_from_base(project_dir: &Path, base: &str) -> String {
 fn ensure_tasks_dir(project_dir: &Path) -> Result<PathBuf, String> {
     let tasks_dir = project_dir.join(TASKS_DIR);
     fs::create_dir_all(&tasks_dir).map_err(|err| err.to_string())?;
+    fs::write(tasks_dir.join(TASKS_STORAGE_MARKER), "").map_err(|err| err.to_string())?;
     Ok(tasks_dir)
 }
 
 fn ticket_storage_dir(project_dir: &Path) -> PathBuf {
     let tasks_dir = project_dir.join(TASKS_DIR);
 
-    if tasks_dir.is_dir() {
+    if tasks_dir.is_dir()
+        && (tasks_dir.join(TASKS_STORAGE_MARKER).is_file()
+            || directory_contains_markdown(&tasks_dir)
+            || directory_is_empty(&tasks_dir))
+    {
         tasks_dir
     } else {
         project_dir.to_path_buf()
     }
+}
+
+fn directory_contains_markdown(dir: &Path) -> bool {
+    fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .any(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("md"))
+        })
+        .unwrap_or(false)
+}
+
+fn directory_is_empty(dir: &Path) -> bool {
+    fs::read_dir(dir)
+        .map(|mut entries| entries.next().is_none())
+        .unwrap_or(false)
 }
 
 fn unique_ticket_id_from_used(used: &HashSet<String>, base: &str) -> String {
@@ -1139,6 +1359,8 @@ fn main() {
             list_tickets,
             create_ticket,
             update_ticket,
+            save_ticket_image,
+            delete_ticket_image,
             reorder_tickets,
             delete_ticket
         ])
@@ -1235,6 +1457,161 @@ mod tests {
         let tickets = list_tickets_from_disk(&dir).expect("list tickets");
         assert_eq!(tickets.len(), 1);
         assert_eq!(tickets[0].id, "planned-work");
+
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn preexisting_empty_tasks_directory_remains_ticket_storage() {
+        let dir = temp_project_dir("empty-tasks-storage");
+        let tasks_dir = dir.join(TASKS_DIR);
+        fs::create_dir_all(&tasks_dir).expect("create unmarked tasks dir");
+
+        let ticket = write_ticket(
+            &dir,
+            Ticket {
+                id: "first-ticket".to_string(),
+                title: "First ticket".to_string(),
+                body: "Body".to_string(),
+                status: "todo".to_string(),
+                order: 1000,
+                created_at: 1,
+                updated_at: 1,
+                file_path: String::new(),
+            },
+        )
+        .expect("write ticket");
+
+        assert_eq!(
+            ticket.file_path,
+            tasks_dir.join("first-ticket.md").to_string_lossy()
+        );
+
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn pasted_ticket_images_are_stored_under_tasks_images() {
+        let dir = temp_project_dir("ticket-image");
+        let tasks_dir = ensure_tasks_dir(&dir).expect("create tasks dir");
+        write_ticket(
+            &dir,
+            Ticket {
+                id: "planned-work".to_string(),
+                title: "Planned work".to_string(),
+                body: "Body".to_string(),
+                status: "todo".to_string(),
+                order: 1000,
+                created_at: 1,
+                updated_at: 1,
+                file_path: String::new(),
+            },
+        )
+        .expect("write ticket");
+
+        let saved = save_ticket_image_to_project(
+            &dir,
+            "planned-work",
+            "image/png",
+            b"\x89PNG\r\n\x1a\npng bytes",
+        )
+        .expect("save pasted image");
+
+        assert!(saved.markdown_path.starts_with("images/"));
+        assert!(saved.markdown_path.ends_with(".png"));
+        assert_eq!(saved.alt, "Pasted image");
+
+        let image_path = PathBuf::from(&saved.file_path);
+        let expected_images_dir = tasks_dir.join("images");
+        assert_eq!(image_path.parent(), Some(expected_images_dir.as_path()));
+        assert_eq!(
+            fs::read(&image_path).expect("read saved image"),
+            b"\x89PNG\r\n\x1a\npng bytes"
+        );
+
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn creating_image_storage_keeps_legacy_root_markdown_in_place() {
+        let dir = temp_project_dir("image-storage-root-tickets");
+        let root_ticket_path = dir.join("Legacy ticket.md");
+        let root_note_path = dir.join("README.md");
+
+        fs::write(
+            &root_ticket_path,
+            "---\nid: legacy-ticket\ntitle: Legacy ticket\nstatus: todo\n---\n\nBody",
+        )
+        .expect("write legacy root ticket");
+        fs::write(&root_note_path, "# Notes").expect("write root note");
+
+        let saved = save_ticket_image_to_project(
+            &dir,
+            "legacy-ticket",
+            "image/jpeg",
+            &[0xff, 0xd8, 0xff, b'j', b'p', b'g'],
+        )
+        .expect("save pasted image");
+
+        assert!(root_ticket_path.exists());
+        assert!(root_note_path.exists());
+        assert!(PathBuf::from(saved.file_path).exists());
+
+        let ticket = read_ticket(&dir, "legacy-ticket").expect("read root ticket");
+        assert_eq!(ticket.file_path, root_ticket_path.to_string_lossy());
+        assert_eq!(ticket.body, "Body");
+
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn pasted_ticket_images_reject_unsupported_image_types() {
+        let dir = temp_project_dir("unsupported-ticket-image");
+        let error = save_ticket_image_to_project(&dir, "planned-work", "image/svg+xml", b"<svg />")
+            .expect_err("reject unsupported image");
+
+        assert_eq!(error, "Unsupported image type.");
+
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn pasted_ticket_images_reject_mismatched_bytes() {
+        let dir = temp_project_dir("mismatched-ticket-image");
+        let error = save_ticket_image_to_project(&dir, "planned-work", "image/png", b"not a png")
+            .expect_err("reject mismatched image bytes");
+
+        assert_eq!(error, "Image data does not match its type.");
+
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn pasted_ticket_images_can_be_deleted_by_markdown_path() {
+        let dir = temp_project_dir("delete-ticket-image");
+        write_ticket(
+            &dir,
+            Ticket {
+                id: "planned-work".to_string(),
+                title: "Planned work".to_string(),
+                body: "Body".to_string(),
+                status: "todo".to_string(),
+                order: 1000,
+                created_at: 1,
+                updated_at: 1,
+                file_path: String::new(),
+            },
+        )
+        .expect("write ticket");
+        let saved =
+            save_ticket_image_to_project(&dir, "planned-work", "image/gif", b"GIF89a image bytes")
+                .expect("save pasted image");
+        let image_path = PathBuf::from(&saved.file_path);
+
+        assert!(image_path.exists());
+
+        delete_ticket_image_from_project(&dir, &saved.markdown_path).expect("delete pasted image");
+        assert!(!image_path.exists());
 
         fs::remove_dir_all(dir).expect("cleanup");
     }
