@@ -3,6 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
+    process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Manager};
@@ -33,6 +34,8 @@ struct ProjectRecord {
 #[serde(rename_all = "camelCase")]
 struct ProjectRegistry {
     projects: Vec<ProjectRecord>,
+    #[serde(default)]
+    removed_project_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -79,17 +82,13 @@ fn get_workspace_info(app: AppHandle) -> Result<WorkspaceInfo, String> {
 
     migrate_default_projects(&default_projects_dir, &mut registry)?;
 
-    if registry.projects.is_empty() {
+    if registry.projects.is_empty() && registry.removed_project_paths.is_empty() {
         let inbox = create_project_record(&mut registry, &default_projects_dir, "Inbox")?;
         seed_project(&PathBuf::from(&inbox.path))?;
     }
 
     save_project_registry(&app, &registry)?;
-
-    Ok(WorkspaceInfo {
-        base_dir: default_projects_dir.to_string_lossy().to_string(),
-        projects: list_projects_from_registry(&registry)?,
-    })
+    workspace_info_from_registry(&app, &registry)
 }
 
 #[tauri::command]
@@ -107,6 +106,7 @@ fn import_project(app: AppHandle, path: String) -> Result<ProjectSummary, String
     let mut registry = load_project_registry(&app)?;
     let project_path = canonical_project_path(Path::new(&path))?;
     let project_path_string = project_path.to_string_lossy().to_string();
+    forget_removed_project_path(&mut registry, &project_path_string);
 
     if let Some(record) = registry
         .projects
@@ -159,6 +159,74 @@ fn import_project(app: AppHandle, path: String) -> Result<ProjectSummary, String
     registry.projects.push(record.clone());
     save_project_registry(&app, &registry)?;
     project_summary(&record)
+}
+
+#[tauri::command]
+fn update_project_name(
+    app: AppHandle,
+    project_id: String,
+    name: String,
+) -> Result<ProjectSummary, String> {
+    let mut registry = load_project_registry(&app)?;
+    let name = clean_title(&name);
+
+    if name.is_empty() {
+        return Err("Project name cannot be empty.".into());
+    }
+
+    let record = registry
+        .projects
+        .iter_mut()
+        .find(|record| record.id == project_id)
+        .ok_or_else(|| "Project not found.".to_string())?;
+
+    record.name = name.clone();
+
+    let project_path = canonical_project_path(Path::new(&record.path))?;
+    let disk_meta = read_project_disk_meta(&project_path).ok();
+    let created_at = disk_meta
+        .as_ref()
+        .map(|meta| meta.created_at)
+        .unwrap_or(record.created_at);
+
+    write_project_disk_meta(
+        &project_path,
+        &ProjectDiskMeta {
+            id: record.id.clone(),
+            name,
+            created_at,
+        },
+    )?;
+
+    let summary = project_summary(record)?;
+    save_project_registry(&app, &registry)?;
+    Ok(summary)
+}
+
+#[tauri::command]
+fn remove_project(app: AppHandle, project_id: String) -> Result<WorkspaceInfo, String> {
+    let mut registry = load_project_registry(&app)?;
+    let record = remove_project_record(&mut registry, &project_id)?;
+
+    remember_removed_project_path(&mut registry, &record.path);
+    save_project_registry(&app, &registry)?;
+    workspace_info_from_registry(&app, &registry)
+}
+
+#[tauri::command]
+fn reorder_projects(app: AppHandle, project_ids: Vec<String>) -> Result<WorkspaceInfo, String> {
+    let mut registry = load_project_registry(&app)?;
+
+    reorder_project_records(&mut registry, &project_ids)?;
+    save_project_registry(&app, &registry)?;
+    workspace_info_from_registry(&app, &registry)
+}
+
+#[tauri::command]
+fn open_project_folder(app: AppHandle, project_id: String) -> Result<(), String> {
+    let project_dir = project_dir(&app, &project_id)?;
+
+    open_path_in_file_explorer(&project_dir)
 }
 
 #[tauri::command]
@@ -279,6 +347,18 @@ fn save_project_registry(app: &AppHandle, registry: &ProjectRegistry) -> Result<
     fs::write(path, contents).map_err(|err| err.to_string())
 }
 
+fn workspace_info_from_registry(
+    app: &AppHandle,
+    registry: &ProjectRegistry,
+) -> Result<WorkspaceInfo, String> {
+    let default_projects_dir = default_projects_dir(app)?;
+
+    Ok(WorkspaceInfo {
+        base_dir: default_projects_dir.to_string_lossy().to_string(),
+        projects: list_projects_from_registry(registry)?,
+    })
+}
+
 fn migrate_default_projects(
     default_projects_dir: &Path,
     registry: &mut ProjectRegistry,
@@ -304,6 +384,10 @@ fn migrate_default_projects(
         let canonical_path_string = canonical_path.to_string_lossy().to_string();
 
         if registered_paths.contains(&canonical_path_string) {
+            continue;
+        }
+
+        if is_removed_project_path(registry, &canonical_path_string) {
             continue;
         }
 
@@ -448,8 +532,106 @@ fn list_projects_from_registry(registry: &ProjectRegistry) -> Result<Vec<Project
         }
     }
 
-    projects.sort_by_key(|project| project.name.to_lowercase());
     Ok(projects)
+}
+
+fn remove_project_record(
+    registry: &mut ProjectRegistry,
+    project_id: &str,
+) -> Result<ProjectRecord, String> {
+    let index = registry
+        .projects
+        .iter()
+        .position(|record| record.id == project_id)
+        .ok_or_else(|| "Project not found.".to_string())?;
+
+    Ok(registry.projects.remove(index))
+}
+
+fn reorder_project_records(
+    registry: &mut ProjectRegistry,
+    project_ids: &[String],
+) -> Result<(), String> {
+    let mut seen = HashSet::new();
+
+    for project_id in project_ids {
+        if !safe_segment(project_id) {
+            return Err("Invalid project id.".into());
+        }
+
+        if !seen.insert(project_id.as_str()) {
+            return Err("Duplicate project id.".into());
+        }
+    }
+
+    let mut remaining = std::mem::take(&mut registry.projects);
+    let mut ordered = Vec::with_capacity(remaining.len());
+
+    for project_id in project_ids {
+        let index = remaining
+            .iter()
+            .position(|record| record.id == *project_id)
+            .ok_or_else(|| "Project not found.".to_string())?;
+
+        ordered.push(remaining.remove(index));
+    }
+
+    ordered.extend(remaining);
+    registry.projects = ordered;
+
+    Ok(())
+}
+
+fn remember_removed_project_path(registry: &mut ProjectRegistry, path: &str) {
+    let normalized = canonical_project_path(Path::new(path))
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_else(|_| path.to_string());
+
+    if !registry
+        .removed_project_paths
+        .iter()
+        .any(|candidate| same_path_string(candidate, &normalized))
+    {
+        registry.removed_project_paths.push(normalized);
+    }
+}
+
+fn forget_removed_project_path(registry: &mut ProjectRegistry, path: &str) {
+    registry
+        .removed_project_paths
+        .retain(|candidate| !same_path_string(candidate, path));
+}
+
+fn is_removed_project_path(registry: &ProjectRegistry, path: &str) -> bool {
+    registry
+        .removed_project_paths
+        .iter()
+        .any(|candidate| same_path_string(candidate, path))
+}
+
+fn open_path_in_file_explorer(path: &Path) -> Result<(), String> {
+    let (program, args) = file_explorer_command(path);
+
+    Command::new(program)
+        .args(args)
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| format!("Could not open project folder: {err}"))
+}
+
+#[cfg(target_os = "macos")]
+fn file_explorer_command(path: &Path) -> (&'static str, Vec<String>) {
+    ("/usr/bin/open", vec![path.to_string_lossy().to_string()])
+}
+
+#[cfg(target_os = "windows")]
+fn file_explorer_command(path: &Path) -> (&'static str, Vec<String>) {
+    ("explorer", vec![path.to_string_lossy().to_string()])
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+fn file_explorer_command(path: &Path) -> (&'static str, Vec<String>) {
+    ("xdg-open", vec![path.to_string_lossy().to_string()])
 }
 
 fn read_project_disk_meta(project_dir: &Path) -> Result<ProjectDiskMeta, String> {
@@ -950,6 +1132,10 @@ fn main() {
             get_workspace_info,
             create_project,
             import_project,
+            update_project_name,
+            remove_project,
+            reorder_projects,
+            open_project_folder,
             list_tickets,
             create_ticket,
             update_ticket,
@@ -968,6 +1154,15 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("todo-md-{name}-{}", now_millis()));
         fs::create_dir_all(&dir).expect("create temp project");
         dir
+    }
+
+    fn project_record(id: &str, name: &str, path: &Path) -> ProjectRecord {
+        ProjectRecord {
+            id: id.to_string(),
+            name: name.to_string(),
+            path: path.to_string_lossy().to_string(),
+            created_at: now_millis(),
+        }
     }
 
     #[test]
@@ -1040,6 +1235,82 @@ mod tests {
         let tickets = list_tickets_from_disk(&dir).expect("list tickets");
         assert_eq!(tickets.len(), 1);
         assert_eq!(tickets[0].id, "planned-work");
+
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn removing_project_record_keeps_project_files_on_disk() {
+        let dir = temp_project_dir("remove-project");
+        let tasks_dir = ensure_tasks_dir(&dir).expect("create tasks dir");
+        let ticket_path = tasks_dir.join("keep-me.md");
+        fs::write(&ticket_path, "# Keep me").expect("write ticket");
+        let mut registry = ProjectRegistry {
+            projects: vec![project_record("inbox", "Inbox", &dir)],
+            ..ProjectRegistry::default()
+        };
+
+        let removed = remove_project_record(&mut registry, "inbox").expect("remove project record");
+        remember_removed_project_path(&mut registry, &removed.path);
+
+        assert!(registry.projects.is_empty());
+        assert!(is_removed_project_path(&registry, &removed.path));
+        assert!(dir.is_dir());
+        assert!(tasks_dir.is_dir());
+        assert!(ticket_path.exists());
+        assert!(list_projects_from_registry(&registry)
+            .expect("list projects")
+            .is_empty());
+
+        forget_removed_project_path(&mut registry, &removed.path);
+        assert!(!is_removed_project_path(&registry, &removed.path));
+
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn project_records_reorder_without_sorting_by_name() {
+        let alpha_dir = temp_project_dir("alpha-order");
+        let beta_dir = temp_project_dir("beta-order");
+        let gamma_dir = temp_project_dir("gamma-order");
+        let mut registry = ProjectRegistry {
+            projects: vec![
+                project_record("alpha", "Alpha", &alpha_dir),
+                project_record("beta", "Beta", &beta_dir),
+                project_record("gamma", "Gamma", &gamma_dir),
+            ],
+            ..ProjectRegistry::default()
+        };
+
+        reorder_project_records(&mut registry, &["gamma".to_string(), "alpha".to_string()])
+            .expect("reorder projects");
+
+        let ids = registry
+            .projects
+            .iter()
+            .map(|project| project.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["gamma", "alpha", "beta"]);
+
+        let visible_ids = list_projects_from_registry(&registry)
+            .expect("list projects")
+            .into_iter()
+            .map(|project| project.id)
+            .collect::<Vec<_>>();
+        assert_eq!(visible_ids, vec!["gamma", "alpha", "beta"]);
+
+        fs::remove_dir_all(alpha_dir).expect("cleanup alpha");
+        fs::remove_dir_all(beta_dir).expect("cleanup beta");
+        fs::remove_dir_all(gamma_dir).expect("cleanup gamma");
+    }
+
+    #[test]
+    fn file_explorer_command_targets_project_folder() {
+        let dir = temp_project_dir("open-project");
+        let (program, args) = file_explorer_command(&dir);
+
+        assert!(!program.is_empty());
+        assert_eq!(args, vec![dir.to_string_lossy().to_string()]);
 
         fs::remove_dir_all(dir).expect("cleanup");
     }
