@@ -18,6 +18,12 @@
   --blue: #2f5f9e;
   --rose: #bd4b4b;
   --gold: #c3832f;
+  --editor-canvas: #f8f7f2;
+  --editor-paper: #fffefa;
+  --editor-ink-soft: #3f403b;
+  --editor-rule: rgba(32, 33, 31, 0.09);
+  --editor-code: #242823;
+  --editor-code-ink: #f4efe3;
   --shadow: 0 20px 60px rgba(52, 45, 35, 0.13);
 }
 
@@ -868,7 +874,8 @@ select:focus {
   display: grid;
   min-height: 0;
   overflow: hidden;
-  padding: 16px 18px 18px;
+  background: var(--editor-canvas);
+  padding: 18px;
 }
 
 .markdown-editor-shell {
@@ -876,7 +883,21 @@ select:focus {
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: white;
+  background: var(--editor-paper);
+  box-shadow:
+    0 14px 34px rgba(52, 45, 35, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.74);
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.markdown-editor-shell:has(.cm-focused) {
+  border-color: rgba(35, 108, 90, 0.48);
+  box-shadow:
+    0 18px 44px rgba(52, 45, 35, 0.11),
+    0 0 0 3px rgba(35, 108, 90, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82);
 }
 
 .markdown-editor,
@@ -885,34 +906,42 @@ select:focus {
 }
 
 .markdown-editor .cm-editor {
-  background: white;
-  color: var(--ink);
-  font-size: 0.95rem;
-  line-height: 1.65;
+  background: transparent;
+  color: var(--editor-ink-soft);
+  font-size: 1rem;
+  line-height: 1.72;
 }
 
 .markdown-editor .cm-editor.cm-focused {
-  outline: none;
+  outline: 2px solid rgba(35, 108, 90, 0.2);
+  outline-offset: -3px;
 }
 
 .markdown-editor .cm-scroller {
   overflow: auto;
   font-family: inherit;
+  justify-content: center;
 }
 
-.markdown-editor .cm-content {
+.markdown-editor .cm-editor .cm-content {
+  flex: 0 1 780px;
+  width: 100%;
+  max-width: 780px;
   min-height: 420px;
-  padding: 16px 22px 22px;
+  margin: 0 auto;
+  padding: 28px 30px 34px;
   caret-color: var(--accent-strong);
 }
 
 .markdown-editor .cm-line {
   min-height: 1.55em;
-  padding: 3px 0;
+  border-radius: 6px;
+  padding: 4px 0;
 }
 
 .markdown-editor .cm-placeholder {
-  color: var(--muted);
+  color: #9a958b;
+  font-style: italic;
 }
 
 .markdown-editor .cm-cursor {
@@ -927,8 +956,8 @@ select:focus {
 .markdown-editor .cm-md-heading-line {
   color: var(--ink);
   font-weight: 850;
-  line-height: 1.25;
-  padding-top: 10px;
+  line-height: 1.22;
+  padding-top: 12px;
 }
 
 .markdown-editor .cm-md-heading-line span {
@@ -936,84 +965,134 @@ select:focus {
 }
 
 .markdown-editor .cm-md-heading-1 {
-  font-size: 1.48rem;
+  font-size: 1.68rem;
 }
 
 .markdown-editor .cm-md-heading-2 {
-  font-size: 1.24rem;
+  box-shadow: inset 0 -1px 0 var(--editor-rule);
+  font-size: 1.34rem;
+  padding-bottom: 6px;
 }
 
 .markdown-editor .cm-md-heading-3 {
-  font-size: 1.08rem;
+  color: var(--accent-strong);
+  font-size: 1.12rem;
 }
 
 .markdown-editor .cm-md-quote-line {
-  border-left: 3px solid var(--accent);
+  border-left: 3px solid rgba(35, 108, 90, 0.58);
+  border-radius: 0 6px 6px 0;
+  background: rgba(220, 239, 230, 0.42);
   color: var(--muted);
-  padding-left: 12px;
+  padding-left: 14px;
 }
 
 .markdown-editor .cm-md-list-line {
-  color: #2f302d;
+  color: var(--editor-ink-soft);
 }
 
 .markdown-editor .cm-md-task-line {
-  color: #2f302d;
+  color: var(--editor-ink-soft);
 }
 
 .markdown-editor .cm-md-task-done {
   color: var(--muted);
   text-decoration: line-through;
   text-decoration-thickness: 1px;
+  text-decoration-color: rgba(112, 110, 104, 0.62);
 }
 
 .markdown-editor .cm-task-checkbox {
   display: inline-flex;
-  width: 24px;
+  width: 28px;
   align-items: center;
   justify-content: flex-start;
-  vertical-align: -3px;
+  vertical-align: -4px;
 }
 
 .markdown-editor .cm-task-checkbox input {
+  display: grid;
   width: 16px;
   min-width: 16px;
   height: 16px;
+  place-items: center;
+  appearance: none;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: #fffefa;
   margin: 0;
-  accent-color: var(--accent);
   cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.markdown-editor .cm-task-checkbox input::after {
+  width: 4px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  content: "";
+  transform: rotate(45deg) scale(0);
+  transition: transform 120ms ease;
+}
+
+.markdown-editor .cm-task-checkbox input:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: 0 2px 7px rgba(35, 108, 90, 0.25);
+}
+
+.markdown-editor .cm-task-checkbox input:checked::after {
+  transform: rotate(45deg) scale(1);
 }
 
 .markdown-editor .cm-list-bullet {
   display: inline-block;
-  width: 1.35em;
+  width: 1.42em;
   color: var(--accent);
   font-weight: 850;
+  transform: translateY(-1px);
 }
 
 .markdown-editor .cm-md-inline-code {
   border-radius: 5px;
-  background: #eee8db;
-  color: #2d2b27;
-  padding: 1px 4px;
+  background: #ece7db;
+  color: #2c332f;
+  box-shadow: inset 0 0 0 1px rgba(200, 191, 173, 0.54);
+  padding: 2px 5px;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 0.9em;
+  font-size: 0.88em;
 }
 
 .markdown-editor .cm-md-code-line {
-  background: #252520;
-  color: #f8f3e8;
+  border-radius: 0;
+  background: var(--editor-code);
+  color: var(--editor-code-ink);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 0.9rem;
-  padding-right: 12px;
-  padding-left: 12px;
+  font-size: 0.91rem;
+  line-height: 1.62;
+  padding-right: 16px;
+  padding-left: 16px;
+}
+
+.markdown-editor .cm-md-code-line-start {
+  border-radius: 8px 8px 0 0;
+  padding-top: 12px;
+}
+
+.markdown-editor .cm-md-code-line-end {
+  border-radius: 0 0 8px 8px;
+  padding-bottom: 12px;
 }
 
 .markdown-editor .cm-md-code-fence {
-  color: #b9b29f;
+  color: #b8c0b5;
 }
 
 .markdown-editor .cm-md-strong {
+  color: #20211f;
   font-weight: 800;
 }
 
@@ -1038,6 +1117,11 @@ select:focus {
 .markdown-editor .cm-markdown-image {
   display: block;
   max-width: 100%;
+  margin: 10px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f3efe6;
+  padding: 8px;
   line-height: 0;
 }
 
@@ -1046,8 +1130,8 @@ select:focus {
   width: auto;
   max-width: min(100%, 680px);
   max-height: 360px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 6px;
+  box-shadow: 0 8px 20px rgba(52, 45, 35, 0.1);
   object-fit: contain;
 }
 
