@@ -22,8 +22,6 @@ export type Ticket = {
   updatedAt: number;
   filePath: string;
   prLink?: string;
-  branch?: string;
-  workspace?: string;
   assignee?: string;
 };
 

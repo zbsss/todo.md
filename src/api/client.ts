@@ -24,6 +24,7 @@ export type TodoApi = {
   removeProject(projectId: string): Promise<WorkspaceInfo>;
   reorderProjects(projectIds: string[]): Promise<WorkspaceInfo>;
   openProject(projectId: string): Promise<void>;
+  openExternalLink(url: string): Promise<void>;
   listTickets(projectId: string): Promise<Ticket[]>;
   createTicket(projectId: string, status: Status, title: string): Promise<Ticket>;
   updateTicket(projectId: string, ticketId: string, title: string, body: string, status: Status): Promise<Ticket>;
@@ -89,6 +90,13 @@ export function createApi({ isTauriRuntime, mockStore = createMockStore() }: Cre
       }
 
       return mockStore.openProject(projectId);
+    },
+    async openExternalLink(url: string) {
+      if (isTauriRuntime) {
+        return invoke<void>("open_external_link", { url });
+      }
+
+      window.open(url, "_blank", "noopener,noreferrer");
     },
     async listTickets(projectId: string) {
       if (isTauriRuntime) {
