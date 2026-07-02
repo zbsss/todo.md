@@ -69,6 +69,12 @@ type Ticket = {
   filePath: string;
 };
 
+type TicketPosition = {
+  id: string;
+  status: Status;
+  order: number;
+};
+
 type TicketDraft = {
   id: string;
   title: string;
@@ -1792,7 +1798,7 @@ async function moveTicket(ticketId: string, status: Status, beforeId?: string) {
   render({ preserveScroll: true });
 
   try {
-    state.tickets = await api.reorderTickets(state.selectedProjectId, positions);
+    state.tickets = await api.reorderTickets(state.selectedProjectId, positions, ticketId);
     render({ preserveScroll: true });
   } catch (error) {
     showError(error, { preserveScroll: true });
@@ -2151,7 +2157,7 @@ function scrollSnapshotElement(key: string) {
 }
 
 function renumberTickets(tickets: Ticket[]) {
-  const nextPositions: Array<{ id: string; status: Status; order: number }> = [];
+  const nextPositions: TicketPosition[] = [];
 
   for (const status of columns.map((column) => column.id)) {
     tickets
@@ -3343,12 +3349,12 @@ const api = {
 
     return mockStore.deleteTicketImage(projectId, markdownPath);
   },
-  async reorderTickets(projectId: string, positions: Array<{ id: string; status: Status; order: number }>) {
+  async reorderTickets(projectId: string, positions: TicketPosition[], movedTicketId?: string) {
     if (isTauriRuntime) {
-      return invoke<Ticket[]>("reorder_tickets", { projectId, positions });
+      return invoke<Ticket[]>("reorder_tickets", { projectId, positions, movedTicketId });
     }
 
-    return mockStore.reorderTickets(projectId, positions);
+    return mockStore.reorderTickets(projectId, positions, movedTicketId);
   },
   async deleteTicket(projectId: string, ticketId: string) {
     if (isTauriRuntime) {
@@ -3594,21 +3600,30 @@ const mockStore = (() => {
     async deleteTicketImage(_projectId: string, _markdownPath: string) {
       return;
     },
-    async reorderTickets(projectId: string, positions: Array<{ id: string; status: Status; order: number }>) {
+    async reorderTickets(projectId: string, positions: TicketPosition[], movedTicketId?: string) {
       const store = read();
       const positionById = new Map(positions.map((position) => [position.id, position]));
+      const updatedAt = Date.now();
 
       store.tickets[projectId] = (store.tickets[projectId] ?? []).map((ticket) => {
         const position = positionById.get(ticket.id);
 
-        return position
-          ? {
-              ...ticket,
-              status: position.status,
-              order: position.order,
-              updatedAt: Date.now()
-            }
-          : ticket;
+        if (!position) {
+          return ticket;
+        }
+
+        const hasChanges = ticket.status !== position.status || ticket.order !== position.order;
+
+        if (!hasChanges) {
+          return ticket;
+        }
+
+        return {
+          ...ticket,
+          status: position.status,
+          order: position.order,
+          updatedAt: !movedTicketId || movedTicketId === ticket.id ? updatedAt : ticket.updatedAt
+        };
       });
       write(store);
 

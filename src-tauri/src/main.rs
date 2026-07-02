@@ -328,19 +328,11 @@ fn reorder_tickets(
     app: AppHandle,
     project_id: String,
     positions: Vec<TicketPosition>,
+    moved_ticket_id: Option<String>,
 ) -> Result<Vec<Ticket>, String> {
     let project_dir = project_dir(&app, &project_id)?;
 
-    for position in positions {
-        validate_status(&position.status)?;
-        let mut ticket = read_ticket(&project_dir, &position.id)?;
-        ticket.status = position.status;
-        ticket.order = position.order;
-        ticket.updated_at = now_millis();
-        write_ticket(&project_dir, ticket)?;
-    }
-
-    list_tickets_from_disk(&project_dir)
+    apply_ticket_positions(&project_dir, &positions, moved_ticket_id.as_deref())
 }
 
 #[tauri::command]
@@ -808,6 +800,57 @@ fn read_ticket(project_dir: &Path, ticket_id: &str) -> Result<Ticket, String> {
         .into_iter()
         .find(|ticket| ticket.id == ticket_id)
         .ok_or_else(|| "Ticket not found.".to_string())
+}
+
+fn apply_ticket_positions(
+    project_dir: &Path,
+    positions: &[TicketPosition],
+    moved_ticket_id: Option<&str>,
+) -> Result<Vec<Ticket>, String> {
+    let moved_ticket_id = moved_ticket_id.and_then(|id| {
+        let trimmed = id.trim();
+
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    });
+
+    for position in positions {
+        validate_status(&position.status)?;
+    }
+
+    if let Some(moved_ticket_id) = moved_ticket_id {
+        if !positions
+            .iter()
+            .any(|position| position.id == moved_ticket_id)
+        {
+            return Err("Moved ticket not found.".to_string());
+        }
+    }
+
+    let updated_at = now_millis();
+
+    for position in positions {
+        let mut ticket = read_ticket(project_dir, &position.id)?;
+        let has_changes = ticket.status != position.status || ticket.order != position.order;
+
+        if !has_changes {
+            continue;
+        }
+
+        ticket.status = position.status.clone();
+        ticket.order = position.order;
+
+        if moved_ticket_id.map_or(true, |moved_ticket_id| moved_ticket_id == ticket.id) {
+            ticket.updated_at = updated_at;
+        }
+
+        write_ticket(project_dir, ticket)?;
+    }
+
+    list_tickets_from_disk(project_dir)
 }
 
 fn parse_ticket_file(path: &Path) -> Result<Ticket, String> {
@@ -1612,6 +1655,69 @@ mod tests {
 
         delete_ticket_image_from_project(&dir, &saved.markdown_path).expect("delete pasted image");
         assert!(!image_path.exists());
+
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
+    fn reordering_preserves_updated_at_for_displaced_tickets() {
+        let dir = temp_project_dir("reorder-preserve-updated-at");
+
+        for (id, order, updated_at) in [
+            ("alpha", 1000, 111),
+            ("bravo", 2000, 222),
+            ("charlie", 3000, 333),
+        ] {
+            write_ticket(
+                &dir,
+                Ticket {
+                    id: id.to_string(),
+                    title: id.to_string(),
+                    body: String::new(),
+                    status: "todo".to_string(),
+                    order,
+                    created_at: 1,
+                    updated_at,
+                    file_path: String::new(),
+                },
+            )
+            .expect("write ticket");
+        }
+
+        let tickets = apply_ticket_positions(
+            &dir,
+            &[
+                TicketPosition {
+                    id: "charlie".to_string(),
+                    status: "todo".to_string(),
+                    order: 1000,
+                },
+                TicketPosition {
+                    id: "alpha".to_string(),
+                    status: "todo".to_string(),
+                    order: 2000,
+                },
+                TicketPosition {
+                    id: "bravo".to_string(),
+                    status: "todo".to_string(),
+                    order: 3000,
+                },
+            ],
+            Some("charlie"),
+        )
+        .expect("reorder tickets");
+
+        let by_id = tickets
+            .iter()
+            .map(|ticket| (ticket.id.as_str(), ticket))
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(by_id["alpha"].order, 2000);
+        assert_eq!(by_id["alpha"].updated_at, 111);
+        assert_eq!(by_id["bravo"].order, 3000);
+        assert_eq!(by_id["bravo"].updated_at, 222);
+        assert_eq!(by_id["charlie"].order, 1000);
+        assert!(by_id["charlie"].updated_at > 333);
 
         fs::remove_dir_all(dir).expect("cleanup");
     }
