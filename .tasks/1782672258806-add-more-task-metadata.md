@@ -1,12 +1,14 @@
 ---
 id: 1782672258806-add-more-task-metadata
 title: Add more task metadata
-status: doing
-order: 3000
+status: done
+rank: U09223372036854780808V64
 created_at: 1782672258806
-updated_at: 1783023876197
-assignee: codex://threads/019f24bc-d80b-73e1-8a9c-209f82b2d46d
+updated_at: 1783032268392
 pr_link: https://github.com/zbsss/todo.md/pull/26
+assignee: codex://threads/019f24bc-d80b-73e1-8a9c-209f82b2d46d
+priority: P1
+size: M
 ---
 
 - creation time
