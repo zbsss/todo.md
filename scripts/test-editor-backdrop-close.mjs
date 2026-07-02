@@ -1,16 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
 const repoRoot = resolve(import.meta.dirname, "..");
-const outDir = join(tmpdir(), `todo-md-editor-backdrop-close-${process.pid}`);
-
-await rm(outDir, { recursive: true, force: true });
-await mkdir(outDir, { recursive: true });
+const outDir = await mkdtemp(join(tmpdir(), "todo-md-editor-backdrop-close-"));
 
 execFileSync(
   resolve(repoRoot, "node_modules/.bin/tsc"),
