@@ -18,7 +18,6 @@ import {
   type ViewUpdate,
   WidgetType
 } from "@codemirror/view";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import {
@@ -42,88 +41,35 @@ import {
   Trash2,
   X
 } from "lucide";
+import { createApi } from "./api/client";
+import { detectAppRuntime } from "./api/runtime";
 import {
   createBackdropDismissState,
   recordBackdropPointerDown,
   resetBackdropDismissState,
   shouldDismissEditorOnBackdropPointerUp
 } from "./editorBackdropClose";
+import type {
+  ProjectSummary,
+  RenderOptions,
+  SaveDraftOptions,
+  ScrollSnapshot,
+  Status,
+  Ticket,
+  TicketDraft,
+  WorkspaceInfo
+} from "./app/types";
+import { escapeAttr, escapeHtml } from "./markdown/escape";
+import { imageExtensionForMime, resolveMarkdownImageSrc } from "./markdown/images";
+import { renderMarkdown } from "./markdown/render";
+import {
+  parseTicketTitle,
+  renderTicketTitle,
+  titleDisplayValue,
+  untitledTicketTitle
+} from "./markdown/title";
+import { insertTicket, renumberTickets, sortTickets } from "./tickets/ordering";
 import "./styles.css";
-
-type Status = "todo" | "doing" | "done";
-
-type ProjectSummary = {
-  id: string;
-  name: string;
-  path: string;
-  ticketCount: number;
-};
-
-type WorkspaceInfo = {
-  baseDir: string;
-  projects: ProjectSummary[];
-};
-
-type Ticket = {
-  id: string;
-  title: string;
-  body: string;
-  status: Status;
-  order: number;
-  createdAt: number;
-  updatedAt: number;
-  filePath: string;
-};
-
-type TicketDraft = {
-  id: string;
-  title: string;
-  body: string;
-  status: Status;
-  pastedImages: string[];
-};
-
-type SavedTicketImage = {
-  markdownPath: string;
-  filePath: string;
-  alt: string;
-};
-
-type MockStore = {
-  workspace: WorkspaceInfo;
-  tickets: Record<string, Ticket[]>;
-};
-
-type MarkdownRenderOptions = {
-  compact?: boolean;
-  skipImages?: boolean;
-  projectPath?: string;
-};
-
-type RenderOptions = {
-  preserveScroll?: boolean;
-  revealTicket?: {
-    id: string;
-    block?: "nearest" | "end";
-  };
-};
-
-type SaveDraftOptions = {
-  flush?: boolean;
-};
-
-type ScrollSnapshot = {
-  windowX: number;
-  windowY: number;
-  elements: Array<{
-    key: string;
-    scrollLeft: number;
-    scrollTop: number;
-  }>;
-};
-
-const untitledTicketTitle = "Untitled ticket";
-const mockStorageKey = "todo.md-demo";
 const columns: Array<{ id: Status; label: string; icon: string }> = [
   { id: "todo", label: "To do", icon: "list-todo" },
   { id: "doing", label: "Doing", icon: "loader-circle" },
@@ -173,7 +119,9 @@ const state: {
   draftSaveError: null
 };
 
-const isTauriRuntime = "__TAURI_INTERNALS__" in window;
+const runtime = detectAppRuntime();
+const isTauriRuntime = runtime.isTauri;
+const api = createApi({ isTauriRuntime });
 let markdownEditorView: EditorView | null = null;
 const pendingImageUploads = new Set<Promise<void>>();
 const draftAutosaveDelayMs = 700;
@@ -533,7 +481,8 @@ function renderTicketCard(ticket: Ticket) {
   const renderedBody = renderMarkdown(ticket.body, {
     compact: true,
     skipImages: true,
-    projectPath: getCurrentProject()?.path
+    projectPath: getCurrentProject()?.path,
+    fileSrcConverter: runtime.fileSrcConverter
   });
 
   return `
@@ -1605,10 +1554,6 @@ function showEditorTitleDisplay(options: { focus?: boolean } = {}) {
   }
 }
 
-function titleDisplayValue(title: string) {
-  return title.trim() ? title : untitledTicketTitle;
-}
-
 function bindGlobalKeys() {
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.renamingProjectId) {
@@ -1863,37 +1808,17 @@ function persistMockDraftSync() {
   }
 
   try {
-    const raw = localStorage.getItem(mockStorageKey);
-
-    if (!raw) {
-      return false;
-    }
-
-    const store = JSON.parse(raw) as MockStore;
-    const projectId = state.selectedProjectId;
-    const draft = state.draft;
-    let updated: Ticket | null = null;
-
-    store.tickets[projectId] = (store.tickets[projectId] ?? []).map((ticket) => {
-      if (ticket.id !== draft.id) {
-        return ticket;
-      }
-
-      updated = {
-        ...ticket,
-        title: normalizeDraftTitle(draft.title),
-        body: normalizeDraftBody(draft.body),
-        status: draft.status,
-        updatedAt: Date.now()
-      };
-      return updated;
+    const updated = api.persistDraftSync({
+      projectId: state.selectedProjectId,
+      draft: state.draft,
+      title: normalizeDraftTitle(state.draft.title),
+      body: normalizeDraftBody(state.draft.body)
     });
 
     if (!updated) {
       return false;
     }
 
-    localStorage.setItem(mockStorageKey, JSON.stringify(store));
     clearScheduledDraftSave();
     clearDraftSaveError();
     state.tickets = state.tickets.map((ticket) => (ticket.id === updated?.id ? updated : ticket)).sort(sortTickets);
@@ -2032,26 +1957,6 @@ async function moveFocusedTicket(ticketId: string, direction: KeyboardMoveDirect
   const beforeId = direction === "up" ? columnTickets[index - 1]?.id : columnTickets[index + 2]?.id;
   await moveTicket(ticketId, ticket.status, beforeId);
   focusTicket(ticketId);
-}
-
-function insertTicket(tickets: Ticket[], ticket: Ticket, status: Status, beforeId?: string) {
-  const next: Ticket[] = [];
-  let inserted = false;
-
-  for (const candidate of [...tickets].sort(sortTickets)) {
-    if (candidate.status === status && beforeId && candidate.id === beforeId) {
-      next.push(ticket);
-      inserted = true;
-    }
-
-    next.push(candidate);
-  }
-
-  if (!inserted) {
-    next.push(ticket);
-  }
-
-  return next;
 }
 
 function getInsertionBeforeId(list: HTMLElement, pointerY: number) {
@@ -2380,25 +2285,6 @@ function scrollSnapshotElement(key: string) {
   return null;
 }
 
-function renumberTickets(tickets: Ticket[]) {
-  const nextPositions: Array<{ id: string; status: Status; order: number }> = [];
-
-  for (const status of columns.map((column) => column.id)) {
-    tickets
-      .filter((ticket) => ticket.status === status)
-      .forEach((ticket, index) => {
-        ticket.order = (index + 1) * 1000;
-        nextPositions.push({
-          id: ticket.id,
-          status: ticket.status,
-          order: ticket.order
-        });
-      });
-  }
-
-  return nextPositions;
-}
-
 function getSelectedTicket() {
   return state.selectedTicketId ? getTicket(state.selectedTicketId) : null;
 }
@@ -2439,14 +2325,6 @@ function updateProjectInWorkspace(workspace: WorkspaceInfo | null, updated: Proj
 
 function ticketsFor(status: Status) {
   return state.tickets.filter((ticket) => ticket.status === status).sort(sortTickets);
-}
-
-function sortTickets(a: Ticket, b: Ticket) {
-  return statusIndex(a.status) - statusIndex(b.status) || a.order - b.order || a.title.localeCompare(b.title);
-}
-
-function statusIndex(status: Status) {
-  return columns.findIndex((column) => column.id === status);
 }
 
 function columnForStatus(status: Status) {
@@ -2595,75 +2473,6 @@ function focusStatusOption(selector: HTMLElement, offset: -1 | 1) {
   const nextIndex = (startIndex + offset + options.length) % options.length;
 
   options[nextIndex]?.focus();
-}
-
-type TaggedTicketTitle = {
-  tag: string;
-  text: string;
-};
-
-function renderTicketTitle(title: string) {
-  const taggedTitle = parseTicketTitle(title);
-
-  if (!taggedTitle) {
-    return escapeHtml(title);
-  }
-
-  const tagVariant = ticketTitleTagVariant(taggedTitle.tag);
-  const titleText = taggedTitle.text
-    ? `<span class="ticket-title-text">${escapeHtml(taggedTitle.text)}</span>`
-    : "";
-
-  return `<span class="ticket-title"><span class="ticket-title-chip ticket-title-chip-${tagVariant}">${escapeHtml(taggedTitle.tag)}</span>${titleText}</span>`;
-}
-
-function parseTicketTitle(title: string): TaggedTicketTitle | null {
-  const trimmed = title.trim();
-  const bracketTag = /^\[([^\]\r\n]{1,32})\](?:\s+(.*)|$)/.exec(trimmed);
-
-  if (bracketTag) {
-    const tag = normalizeTicketTitleTag(bracketTag[1]);
-
-    if (!tag) {
-      return null;
-    }
-
-    return {
-      tag,
-      text: bracketTag[2]?.trim() ?? ""
-    };
-  }
-
-  const colonTag = /^([A-Za-z][A-Za-z0-9 _/-]{0,31}):\s+(.+)$/.exec(trimmed);
-
-  if (!colonTag) {
-    return null;
-  }
-
-  const tag = normalizeTicketTitleTag(colonTag[1]);
-
-  if (!tag) {
-    return null;
-  }
-
-  return {
-    tag,
-    text: colonTag[2].trim()
-  };
-}
-
-function normalizeTicketTitleTag(tag: string) {
-  return tag.split(/\s+/).filter(Boolean).join(" ");
-}
-
-function ticketTitleTagVariant(tag: string) {
-  let hash = 0;
-
-  for (const character of tag.toLowerCase()) {
-    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
-  }
-
-  return hash % 6;
 }
 
 function mountMarkdownEditor(parent: HTMLElement, value: string) {
@@ -3061,7 +2870,11 @@ function decorateInlineMarkdown(
       continue;
     }
 
-    const src = resolveMarkdownImageSrc(match[2], getCurrentProject()?.path);
+    const src = resolveMarkdownImageSrc(
+      match[2],
+      getCurrentProject()?.path,
+      runtime.fileSrcConverter
+    );
 
     if (!src) {
       continue;
@@ -3217,165 +3030,6 @@ function updateTicketCount(workspace: WorkspaceInfo | null, projectId: string, d
   };
 }
 
-function renderMarkdown(markdown: string, options: MarkdownRenderOptions = {}) {
-  const lines = markdown.trim().split("\n");
-
-  if (!markdown.trim()) {
-    return "";
-  }
-
-  const html: string[] = [];
-  let list: "ul" | "ol" | null = null;
-  let paragraph: string[] = [];
-  let inCode = false;
-  let codeLines: string[] = [];
-
-  const flushParagraph = () => {
-    if (!paragraph.length) {
-      return;
-    }
-
-    const renderedParagraph = renderInline(paragraph.join(" "), options).trim();
-
-    if (renderedParagraph) {
-      html.push(`<p>${renderedParagraph}</p>`);
-    }
-
-    paragraph = [];
-  };
-
-  const closeList = () => {
-    if (list) {
-      html.push(`</${list}>`);
-      list = null;
-    }
-  };
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-
-    if (trimmed.startsWith("```")) {
-      if (inCode) {
-        html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
-        codeLines = [];
-        inCode = false;
-      } else {
-        flushParagraph();
-        closeList();
-        inCode = true;
-      }
-      continue;
-    }
-
-    if (inCode) {
-      codeLines.push(line);
-      continue;
-    }
-
-    if (!trimmed) {
-      flushParagraph();
-      closeList();
-      continue;
-    }
-
-    const heading = /^(#{1,3})\s+(.+)$/.exec(trimmed);
-
-    if (heading && !options.compact) {
-      flushParagraph();
-      closeList();
-      const level = heading[1].length + 2;
-      html.push(`<h${level}>${renderInline(heading[2], options)}</h${level}>`);
-      continue;
-    }
-
-    const quote = /^>\s+(.+)$/.exec(trimmed);
-
-    if (quote && !options.compact) {
-      flushParagraph();
-      closeList();
-      html.push(`<blockquote>${renderInline(quote[1], options)}</blockquote>`);
-      continue;
-    }
-
-    const unordered = /^[-*]\s+(.+)$/.exec(trimmed);
-    const ordered = /^\d+\.\s+(.+)$/.exec(trimmed);
-
-    if (unordered || ordered) {
-      flushParagraph();
-      const nextList = unordered ? "ul" : "ol";
-
-      if (list && list !== nextList) {
-        closeList();
-      }
-
-      if (!list) {
-        html.push(`<${nextList}>`);
-        list = nextList;
-      }
-
-      const renderedItem = renderInline((unordered ?? ordered)?.[1] ?? "", options).trim();
-
-      if (renderedItem) {
-        html.push(`<li>${renderedItem}</li>`);
-      }
-
-      continue;
-    }
-
-    closeList();
-    paragraph.push(trimmed.replace(/^#+\s+/, ""));
-  }
-
-  flushParagraph();
-  closeList();
-
-  if (inCode) {
-    html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
-  }
-
-  return options.compact ? html.slice(0, 2).join("") : html.join("");
-}
-
-function renderInline(value: string, options: MarkdownRenderOptions = {}) {
-  const placeholders: string[] = [];
-  let html = escapeHtml(value);
-
-  html = html.replace(/`([^`]+)`/g, (_, code: string) => {
-    const token = `@@TOKEN_${placeholders.length}@@`;
-    placeholders.push(`<code>${code}</code>`);
-    return token;
-  });
-
-  html = html
-    .replace(/!\[([^\]\n]*)\]\(([^)\s]+)\)/g, (match, alt: string, src: string) => {
-      if (options.skipImages) {
-        return "";
-      }
-
-      const imageSrc = resolveMarkdownImageSrc(src, options.projectPath);
-
-      if (!imageSrc) {
-        return match;
-      }
-
-      return `<img src="${escapeAttr(imageSrc)}" alt="${alt}" loading="lazy" />`;
-    })
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*([^*]+)\*/g, "<em>$1</em>")
-    .replace(
-      /(^|[^!])\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
-      '$1<a href="$3" target="_blank" rel="noreferrer">$2</a>'
-    )
-    .replace(/\[ \]\s+/g, '<input type="checkbox" disabled /> ')
-    .replace(/\[x\]\s+/gi, '<input type="checkbox" checked disabled /> ');
-
-  placeholders.forEach((replacement, index) => {
-    html = html.replace(`@@TOKEN_${index}@@`, replacement);
-  });
-
-  return html;
-}
-
 function icon(name: string) {
   return `<i data-lucide="${name}" aria-hidden="true"></i>`;
 }
@@ -3405,19 +3059,6 @@ function hydrateIcons() {
   });
 }
 
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
-
-function escapeAttr(value: string) {
-  return escapeHtml(value);
-}
-
 function shortPath(path: string) {
   const normalized = path.replaceAll("\\", "/");
   const parts = normalized.split("/").filter(Boolean);
@@ -3427,84 +3068,6 @@ function shortPath(path: string) {
   }
 
   return `.../${parts.slice(-3).join("/")}`;
-}
-
-function resolveMarkdownImageSrc(src: string, projectPath?: string) {
-  const trimmed = src.trim();
-
-  if (/^https?:\/\//i.test(trimmed) || /^data:image\//i.test(trimmed)) {
-    return trimmed;
-  }
-
-  const relativePath = normalizeTaskImagePath(trimmed);
-
-  if (!relativePath || !projectPath) {
-    return null;
-  }
-
-  if (!isTauriRuntime) {
-    return relativePath;
-  }
-
-  return convertFileSrc(joinFilePath(projectPath, ".tasks", relativePath));
-}
-
-function normalizeTaskImagePath(path: string) {
-  const normalized = path.replaceAll("\\", "/").replace(/^\.\//, "");
-  const relativePath = normalized.startsWith(".tasks/images/")
-    ? normalized.slice(".tasks/".length)
-    : normalized;
-  const parts = relativePath.split("/");
-
-  if (parts.length < 2 || parts[0] !== "images") {
-    return null;
-  }
-
-  if (parts.some((part) => !part || part === "." || part === "..")) {
-    return null;
-  }
-
-  return relativePath;
-}
-
-function joinFilePath(base: string, ...segments: string[]) {
-  const separator = base.includes("\\") && !base.includes("/") ? "\\" : "/";
-  const normalizedSegments = segments.map((segment) =>
-    segment
-      .replaceAll("\\", separator)
-      .replaceAll("/", separator)
-      .replace(/^[\\/]+|[\\/]+$/g, "")
-  );
-
-  return [base.replace(/[\\/]+$/, ""), ...normalizedSegments].join(separator);
-}
-
-function imageExtensionForMime(mimeType: string) {
-  switch (mimeType.split(";")[0].trim().toLowerCase()) {
-    case "image/png":
-      return "png";
-    case "image/jpeg":
-      return "jpg";
-    case "image/gif":
-      return "gif";
-    case "image/webp":
-      return "webp";
-    case "image/bmp":
-      return "bmp";
-    default:
-      return null;
-  }
-}
-
-function bytesToDataUrl(mimeType: string, bytes: number[]) {
-  const chunkSize = 0x8000;
-  let binary = "";
-
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize));
-  }
-
-  return `data:${mimeType};base64,${btoa(binary)}`;
 }
 
 async function copyText(value: string) {
@@ -3556,372 +3119,5 @@ function showError(error: unknown, renderOptions: RenderOptions = {}) {
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
-
-const api = {
-  async getWorkspaceInfo() {
-    if (isTauriRuntime) {
-      return invoke<WorkspaceInfo>("get_workspace_info");
-    }
-
-    return mockStore.getWorkspaceInfo();
-  },
-  async createProject(name: string) {
-    if (isTauriRuntime) {
-      return invoke<ProjectSummary>("create_project", { name });
-    }
-
-    return mockStore.createProject(name);
-  },
-  async importProject(path: string) {
-    if (isTauriRuntime) {
-      return invoke<ProjectSummary>("import_project", { path });
-    }
-
-    return mockStore.importProject(path);
-  },
-  async updateProjectName(projectId: string, name: string) {
-    if (isTauriRuntime) {
-      return invoke<ProjectSummary>("update_project_name", { projectId, name });
-    }
-
-    return mockStore.updateProjectName(projectId, name);
-  },
-  async removeProject(projectId: string) {
-    if (isTauriRuntime) {
-      return invoke<WorkspaceInfo>("remove_project", { projectId });
-    }
-
-    return mockStore.removeProject(projectId);
-  },
-  async reorderProjects(projectIds: string[]) {
-    if (isTauriRuntime) {
-      return invoke<WorkspaceInfo>("reorder_projects", { projectIds });
-    }
-
-    return mockStore.reorderProjects(projectIds);
-  },
-  async openProject(projectId: string) {
-    if (isTauriRuntime) {
-      return invoke<void>("open_project_folder", { projectId });
-    }
-
-    return mockStore.openProject(projectId);
-  },
-  async listTickets(projectId: string) {
-    if (isTauriRuntime) {
-      return invoke<Ticket[]>("list_tickets", { projectId });
-    }
-
-    return mockStore.listTickets(projectId);
-  },
-  async createTicket(projectId: string, status: Status, title: string) {
-    if (isTauriRuntime) {
-      return invoke<Ticket>("create_ticket", { projectId, status, title });
-    }
-
-    return mockStore.createTicket(projectId, status, title);
-  },
-  async updateTicket(projectId: string, ticketId: string, title: string, body: string, status: Status) {
-    if (isTauriRuntime) {
-      return invoke<Ticket>("update_ticket", { projectId, ticketId, title, body, status });
-    }
-
-    return mockStore.updateTicket(projectId, ticketId, title, body, status);
-  },
-  async saveTicketImage(projectId: string, ticketId: string, mimeType: string, bytes: number[]) {
-    if (isTauriRuntime) {
-      return invoke<SavedTicketImage>("save_ticket_image", { projectId, ticketId, mimeType, bytes });
-    }
-
-    return mockStore.saveTicketImage(projectId, ticketId, mimeType, bytes);
-  },
-  async deleteTicketImage(projectId: string, markdownPath: string) {
-    if (isTauriRuntime) {
-      return invoke<void>("delete_ticket_image", { projectId, markdownPath });
-    }
-
-    return mockStore.deleteTicketImage(projectId, markdownPath);
-  },
-  async reorderTickets(projectId: string, positions: Array<{ id: string; status: Status; order: number }>) {
-    if (isTauriRuntime) {
-      return invoke<Ticket[]>("reorder_tickets", { projectId, positions });
-    }
-
-    return mockStore.reorderTickets(projectId, positions);
-  },
-  async deleteTicket(projectId: string, ticketId: string) {
-    if (isTauriRuntime) {
-      return invoke<void>("delete_ticket", { projectId, ticketId });
-    }
-
-    return mockStore.deleteTicket(projectId, ticketId);
-  }
-};
-
-const mockStore = (() => {
-  const seed = (): MockStore => {
-    const now = Date.now();
-    const project: ProjectSummary = {
-      id: "inbox",
-      name: "Inbox",
-      path: "~/todo.md/projects/inbox",
-      ticketCount: 3
-    };
-
-    return {
-      workspace: {
-        baseDir: "~/todo.md/projects",
-        projects: [project]
-      },
-      tickets: {
-        inbox: [
-          {
-            id: "capture-app-ideas",
-            title: "Capture app ideas",
-            body: "Use **Markdown** for notes, links, and checklists.\n\n- Keep tickets portable\n- Make project folders easy to inspect",
-            status: "todo",
-            order: 1000,
-            createdAt: now,
-            updatedAt: now,
-            filePath: "~/todo.md/projects/inbox/capture-app-ideas.md"
-          },
-          {
-            id: "sketch-board-columns",
-            title: "Sketch board columns",
-            body: "Columns are intentionally small for now:\n\n- To do\n- Doing\n- Done",
-            status: "doing",
-            order: 1000,
-            createdAt: now,
-            updatedAt: now,
-            filePath: "~/todo.md/projects/inbox/sketch-board-columns.md"
-          },
-          {
-            id: "keep-tickets-local",
-            title: "Keep tickets local",
-            body: "Every card is backed by a plain `.md` file on disk.",
-            status: "done",
-            order: 1000,
-            createdAt: now,
-            updatedAt: now,
-            filePath: "~/todo.md/projects/inbox/keep-tickets-local.md"
-          }
-        ]
-      }
-    };
-  };
-
-  const read = (): MockStore => {
-    const raw = localStorage.getItem(mockStorageKey);
-
-    if (!raw) {
-      const next = seed();
-      write(next);
-      return next;
-    }
-
-    return JSON.parse(raw) as MockStore;
-  };
-
-  const write = (store: MockStore) => localStorage.setItem(mockStorageKey, JSON.stringify(store));
-  const slugify = (value: string) =>
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "") || "untitled";
-
-  return {
-    async getWorkspaceInfo() {
-      return read().workspace;
-    },
-    async createProject(name: string) {
-      const store = read();
-      const id = `${Date.now()}-${slugify(name)}`;
-      const project: ProjectSummary = {
-        id,
-        name,
-        path: `~/todo.md/projects/${id}`,
-        ticketCount: 0
-      };
-
-      store.workspace.projects.push(project);
-      store.tickets[id] = [];
-      write(store);
-
-      return project;
-    },
-    async importProject(path: string) {
-      const store = read();
-      const name = path.trim();
-      const id = `${Date.now()}-${slugify(name)}`;
-      const project: ProjectSummary = {
-        id,
-        name,
-        path: `~/todo.md/projects/${id}`,
-        ticketCount: 0
-      };
-
-      store.workspace.projects.push(project);
-      store.tickets[id] = [];
-      write(store);
-
-      return project;
-    },
-    async updateProjectName(projectId: string, name: string) {
-      const store = read();
-      let updated: ProjectSummary | null = null;
-
-      store.workspace.projects = store.workspace.projects.map((project) => {
-        if (project.id !== projectId) {
-          return project;
-        }
-
-        updated = {
-          ...project,
-          name
-        };
-        return updated;
-      });
-      write(store);
-
-      if (!updated) {
-        throw new Error("Project not found.");
-      }
-
-      return updated;
-    },
-    async removeProject(projectId: string) {
-      const store = read();
-
-      store.workspace.projects = store.workspace.projects.filter((project) => project.id !== projectId);
-      write(store);
-
-      return store.workspace;
-    },
-    async reorderProjects(projectIds: string[]) {
-      const store = read();
-      const requested = new Set(projectIds);
-      const byId = new Map(store.workspace.projects.map((project) => [project.id, project]));
-      const ordered = projectIds.map((id) => byId.get(id)).filter((project): project is ProjectSummary => Boolean(project));
-      const remaining = store.workspace.projects.filter((project) => !requested.has(project.id));
-
-      store.workspace.projects = [...ordered, ...remaining];
-      write(store);
-
-      return store.workspace;
-    },
-    async openProject(projectId: string) {
-      const project = read().workspace.projects.find((candidate) => candidate.id === projectId);
-
-      if (!project) {
-        throw new Error("Project not found.");
-      }
-    },
-    async listTickets(projectId: string) {
-      return read().tickets[projectId] ?? [];
-    },
-    async createTicket(projectId: string, status: Status, title: string) {
-      const store = read();
-      const now = Date.now();
-      const id = `${now}-${slugify(title)}`;
-      const ticket: Ticket = {
-        id,
-        title,
-        body: "",
-        status,
-        order: (store.tickets[projectId]?.filter((candidate) => candidate.status === status).length ?? 0) * 1000 + 1000,
-        createdAt: now,
-        updatedAt: now,
-        filePath: `~/todo.md/projects/${projectId}/${id}.md`
-      };
-
-      store.tickets[projectId] = [...(store.tickets[projectId] ?? []), ticket];
-      store.workspace.projects = store.workspace.projects.map((project) =>
-        project.id === projectId ? { ...project, ticketCount: project.ticketCount + 1 } : project
-      );
-      write(store);
-
-      return ticket;
-    },
-    async updateTicket(projectId: string, ticketId: string, title: string, body: string, status: Status) {
-      const store = read();
-      let updated: Ticket | null = null;
-
-      store.tickets[projectId] = (store.tickets[projectId] ?? []).map((ticket) => {
-        if (ticket.id !== ticketId) {
-          return ticket;
-        }
-
-        updated = {
-          ...ticket,
-          title,
-          body,
-          status,
-          updatedAt: Date.now()
-        };
-        return updated;
-      });
-      write(store);
-
-      if (!updated) {
-        throw new Error("Ticket not found.");
-      }
-
-      return updated;
-    },
-    async saveTicketImage(projectId: string, ticketId: string, mimeType: string, bytes: number[]) {
-      const store = read();
-      const project = store.workspace.projects.find((candidate) => candidate.id === projectId);
-      const ticket = store.tickets[projectId]?.find((candidate) => candidate.id === ticketId);
-      const extension = imageExtensionForMime(mimeType);
-
-      if (!project || !ticket) {
-        throw new Error("Ticket not found.");
-      }
-
-      if (!extension) {
-        throw new Error("Unsupported image type.");
-      }
-
-      const fileName = `${Date.now()}-${ticketId}.${extension}`;
-
-      return {
-        markdownPath: bytesToDataUrl(mimeType, bytes),
-        filePath: `${project.path}/.tasks/images/${fileName}`,
-        alt: "Pasted image"
-      };
-    },
-    async deleteTicketImage(_projectId: string, _markdownPath: string) {
-      return;
-    },
-    async reorderTickets(projectId: string, positions: Array<{ id: string; status: Status; order: number }>) {
-      const store = read();
-      const positionById = new Map(positions.map((position) => [position.id, position]));
-
-      store.tickets[projectId] = (store.tickets[projectId] ?? []).map((ticket) => {
-        const position = positionById.get(ticket.id);
-
-        return position
-          ? {
-              ...ticket,
-              status: position.status,
-              order: position.order,
-              updatedAt: Date.now()
-            }
-          : ticket;
-      });
-      write(store);
-
-      return store.tickets[projectId];
-    },
-    async deleteTicket(projectId: string, ticketId: string) {
-      const store = read();
-      store.tickets[projectId] = (store.tickets[projectId] ?? []).filter((ticket) => ticket.id !== ticketId);
-      store.workspace.projects = store.workspace.projects.map((project) =>
-        project.id === projectId ? { ...project, ticketCount: Math.max(0, project.ticketCount - 1) } : project
-      );
-      write(store);
-    }
-  };
-})();
 
 void main();
