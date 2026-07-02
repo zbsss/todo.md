@@ -551,7 +551,7 @@ function renderEditor() {
 
   return `
     <div class="modal-backdrop" data-action="close-editor">
-      <section class="editor-panel" role="dialog" aria-modal="true" aria-labelledby="editor-title">
+      <section class="editor-panel" role="dialog" aria-modal="true" aria-labelledby="editor-title" tabindex="-1">
         <header class="editor-header">
           <div>
             <p class="eyebrow">Ticket</p>
@@ -1379,7 +1379,17 @@ function openEditor(ticketId: string) {
   };
   state.draftSaveError = null;
   render();
-  document.querySelector<HTMLInputElement>("#editor-title")?.focus();
+  focusEditorPanel();
+}
+
+function focusEditorPanel() {
+  const panel = document.querySelector<HTMLElement>(".editor-panel");
+
+  if (!panel) {
+    return;
+  }
+
+  panel.focus({ preventScroll: true });
 }
 
 function closeEditor() {
