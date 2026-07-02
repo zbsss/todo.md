@@ -1101,19 +1101,44 @@ select:focus {
   display: flex;
   max-width: min(760px, 100%);
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 10px;
   align-items: end;
   margin-top: 12px;
 }
 
+.editor-metadata-field,
 .tag-editor {
   display: grid;
-  width: min(320px, 100%);
-  min-width: 210px;
   gap: 5px;
+}
+
+.editor-metadata-field > span,
+.tag-editor > span {
   color: var(--muted);
   font-size: 0.72rem;
   font-weight: 780;
+  line-height: 1.1;
+}
+
+.editor-selector-field {
+  flex: 0 0 auto;
+}
+
+.editor-priority-field {
+  width: 190px;
+}
+
+.editor-size-field {
+  width: 150px;
+}
+
+.editor-selector-field .status-selector {
+  width: 100%;
+}
+
+.tag-editor {
+  width: min(320px, 100%);
+  min-width: 210px;
 }
 
 .tag-editor input {
@@ -1134,11 +1159,11 @@ select:focus {
 }
 
 .task-selector-priority {
-  width: 118px;
+  width: 190px;
 }
 
 .task-selector-size {
-  width: 96px;
+  width: 150px;
 }
 
 .status-selector-button {
@@ -1176,6 +1201,10 @@ select:focus {
   align-items: center;
   font-size: 0.88rem;
   font-weight: 800;
+}
+
+.status-current.is-chip-only {
+  grid-template-columns: 24px;
 }
 
 .status-current span:last-child,
@@ -1235,6 +1264,13 @@ select:focus {
   transform: rotate(180deg);
 }
 
+.editor-metadata-controls .status-menu {
+  right: auto;
+  left: 0;
+  width: 100%;
+  min-width: 100%;
+}
+
 .status-menu {
   position: absolute;
   top: calc(100% + 7px);
@@ -1280,6 +1316,14 @@ select:focus {
   text-align: left;
 }
 
+.status-option .status-option-icon {
+  grid-column: 1;
+}
+
+.status-option span:nth-child(2) {
+  grid-column: 2;
+}
+
 .status-option:hover,
 .status-option:focus {
   background: #f1eadf;
@@ -1294,6 +1338,8 @@ select:focus {
   display: grid;
   width: 18px;
   height: 18px;
+  grid-column: 3;
+  justify-self: end;
   place-items: center;
   color: var(--accent);
 }
@@ -1591,6 +1637,15 @@ select:focus {
 
   .editor-actions {
     flex-wrap: wrap;
+  }
+
+  .editor-selector-field {
+    flex: 1 1 140px;
+    width: auto;
+  }
+
+  .tag-editor {
+    width: 100%;
   }
 
   .status-selector {

@@ -722,8 +722,14 @@ function renderEditor() {
             ${renderTicketTimestamps(ticket)}
             ${renderTicketMetadata(ticket)}
             <div class="editor-metadata-controls" aria-label="Task metadata">
-              ${renderTaskSelector("priority", state.draft.priority)}
-              ${renderTaskSelector("size", state.draft.size)}
+              <div class="editor-metadata-field editor-selector-field editor-priority-field">
+                <span>Priority</span>
+                ${renderTaskSelector("priority", state.draft.priority)}
+              </div>
+              <div class="editor-metadata-field editor-selector-field editor-size-field">
+                <span>Size</span>
+                ${renderTaskSelector("size", state.draft.size)}
+              </div>
               <label class="tag-editor">
                 <span>Tags</span>
                 <input
@@ -787,7 +793,8 @@ type TaskSelectorOption = {
 function renderTaskSelector(kind: TaskSelectorKind, value: string | undefined) {
   const config = taskSelectorConfig(kind);
   const selected = selectedTaskSelectorOption(kind, value);
-  const currentLabel = selected.value ? selected.label : config.placeholder;
+  const isChipOnlyValue = isChipOnlyTaskSelectorValue(kind, selected);
+  const currentLabel = taskSelectorCurrentLabel(kind, selected, config.placeholder);
 
   return `
     <div class="status-selector task-selector task-selector-${kind}" data-task-selector data-selector-kind="${kind}">
@@ -799,9 +806,9 @@ function renderTaskSelector(kind: TaskSelectorKind, value: string | undefined) {
         aria-expanded="false"
         aria-label="${escapeAttr(`${config.label}: ${selected.label}. Change ${config.label.toLowerCase()}`)}"
       >
-        <span class="status-current">
+        <span class="status-current ${isChipOnlyValue ? "is-chip-only" : ""}">
           <span class="${escapeAttr(taskSelectorMarkClass(kind, selected.value))}" data-task-current-mark>${renderTaskSelectorMark(kind, selected)}</span>
-          <span data-task-current-label>${escapeHtml(currentLabel)}</span>
+          <span data-task-current-label ${isChipOnlyValue ? "hidden" : ""}>${escapeHtml(currentLabel)}</span>
         </span>
         <span class="status-chevron">${icon("chevron-down")}</span>
       </button>
@@ -809,6 +816,7 @@ function renderTaskSelector(kind: TaskSelectorKind, value: string | undefined) {
         ${config.options
           .map((option) => {
             const isSelected = option.value === selected.value;
+            const isChipOnlyOption = isChipOnlyTaskSelectorValue(kind, option);
 
             return `
               <button
@@ -820,7 +828,7 @@ function renderTaskSelector(kind: TaskSelectorKind, value: string | undefined) {
                 aria-checked="${isSelected ? "true" : "false"}"
               >
                 <span class="${escapeAttr(taskSelectorMarkClass(kind, option.value))}">${renderTaskSelectorMark(kind, option)}</span>
-                <span>${escapeHtml(option.label)}</span>
+                <span ${isChipOnlyOption ? "hidden" : ""}>${escapeHtml(option.label)}</span>
                 <span class="status-option-check">${isSelected ? icon("check") : ""}</span>
               </button>
             `;
@@ -868,6 +876,18 @@ function selectedTaskSelectorOption(kind: TaskSelectorKind, value: string | unde
   const selected = config.options.find((option) => option.value === (value ?? ""));
 
   return selected ?? config.options[0];
+}
+
+function isChipOnlyTaskSelectorValue(kind: TaskSelectorKind, option: TaskSelectorOption) {
+  return kind !== "status" && Boolean(option.value);
+}
+
+function taskSelectorCurrentLabel(kind: TaskSelectorKind, option: TaskSelectorOption, placeholder: string) {
+  if (isChipOnlyTaskSelectorValue(kind, option)) {
+    return "";
+  }
+
+  return option.value ? option.label : option.label || placeholder;
 }
 
 function renderTaskSelectorMark(kind: TaskSelectorKind, option: TaskSelectorOption) {
@@ -2876,11 +2896,14 @@ function updateTaskSelector(selector: HTMLElement | null, kind: TaskSelectorKind
 
   const config = taskSelectorConfig(kind);
   const selected = selectedTaskSelectorOption(kind, value);
+  const isChipOnlyValue = isChipOnlyTaskSelectorValue(kind, selected);
+  const current = selector.querySelector<HTMLElement>(".status-current");
   const currentMark = selector.querySelector<HTMLElement>("[data-task-current-mark]");
   const currentLabel = selector.querySelector<HTMLElement>("[data-task-current-label]");
   const trigger = selector.querySelector<HTMLButtonElement>(".status-selector-button");
 
   trigger?.setAttribute("aria-label", `${config.label}: ${selected.label}. Change ${config.label.toLowerCase()}`);
+  current?.classList.toggle("is-chip-only", isChipOnlyValue);
 
   if (currentMark) {
     currentMark.className = taskSelectorMarkClass(kind, selected.value);
@@ -2888,7 +2911,8 @@ function updateTaskSelector(selector: HTMLElement | null, kind: TaskSelectorKind
   }
 
   if (currentLabel) {
-    currentLabel.textContent = selected.value ? selected.label : config.placeholder;
+    currentLabel.hidden = isChipOnlyValue;
+    currentLabel.textContent = taskSelectorCurrentLabel(kind, selected, config.placeholder);
   }
 
   selector.querySelectorAll<HTMLButtonElement>(".status-option").forEach((option) => {
