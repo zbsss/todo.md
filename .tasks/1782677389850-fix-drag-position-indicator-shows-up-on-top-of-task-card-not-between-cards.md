@@ -4,7 +4,7 @@ title: Fix: drag position indicator shows up on top of Task card, not between ca
 status: done
 order: 9000
 created_at: 1782677389851
-updated_at: 1783008951086
+updated_at: 1783015729919
 ---
 
 When dragging task to change order the line should show up between tasks indicating where the task will be places, not on top of the task card below it (like on the screenshot).

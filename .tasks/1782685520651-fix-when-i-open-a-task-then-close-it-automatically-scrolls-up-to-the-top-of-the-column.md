@@ -4,7 +4,7 @@ title: Fix: when i open a task, then close, it automatically scrolls up to the t
 status: done
 order: 12000
 created_at: 1782685520652
-updated_at: 1783008951090
+updated_at: 1783015729923
 ---
 
 It should remain in the same position i was when i opened that task.

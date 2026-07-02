@@ -4,7 +4,7 @@ title: Remove scrollbars
 status: done
 order: 8000
 created_at: 1782677187068
-updated_at: 1783008951085
+updated_at: 1783015729918
 ---
 
 Scroll bar is too big, and too close to the tasks. I don’t even know if we need to show a scroll bar, I think we should hide it completely.

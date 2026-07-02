@@ -1,18 +1,16 @@
 ---
 id: 1782679531186-ideas-better-support-for-ai-agents
 title: Idea: Better support for AI Agents
-status: todo
-order: 5000
+status: doing
+order: 4000
 created_at: 1782679531186
-updated_at: 1783008951061
+updated_at: 1783015828613
 ---
 
 Add more metadata like:
 - PR link
 - Branch/workspace
-- assignee - which codex agent (could we have a link that open directly the local codex app - not the browser)?
+- assignee - which codex thread/agent, this should be a codex deep link like: codex://threads/019f239d-dd6d-7451-856c-3847cadaf912
 
-Minimal CLI + skill to allow agents to easily find Todo tasks.
-
-Append only comment section that cannot be edited from markdown editor. This would be stored at the end of the markdown document, maybe identified by a markdown comment with some special indicator of start of comment section.
-Agents would use the CLI to append comments.
+PR link and Codex deep link should show up on the Task card on the Board view below the title. It should look nice (similar style to Notion) and be clickable links.
+This should also show up on the detailed Task view, below the titlte.

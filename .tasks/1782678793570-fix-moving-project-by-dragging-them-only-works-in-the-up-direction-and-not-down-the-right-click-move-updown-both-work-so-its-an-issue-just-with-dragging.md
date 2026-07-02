@@ -4,7 +4,7 @@ title: Fix: Moving project by dragging them only works in the up direction, and 
 status: todo
 order: 6000
 created_at: 1782678793570
-updated_at: 1783008951062
+updated_at: 1783015729896
 ---
 
 The right click move up/down both work, so it’s an issue just with dragging.

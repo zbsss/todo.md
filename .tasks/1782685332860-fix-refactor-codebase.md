@@ -1,10 +1,10 @@
 ---
 id: 1782685332860-fix-refactor-codebase
 title: Fix: refactor codebase
-status: doing
-order: 1000
+status: done
+order: 13000
 created_at: 1782685332861
-updated_at: 1783008951068
+updated_at: 1783015729924
 ---
 
 ## Goal

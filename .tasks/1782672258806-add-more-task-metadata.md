@@ -2,9 +2,9 @@
 id: 1782672258806-add-more-task-metadata
 title: Add more task metadata
 status: doing
-order: 5000
+order: 3000
 created_at: 1782672258806
-updated_at: 1783008951073
+updated_at: 1783015729907
 ---
 
 - creation time

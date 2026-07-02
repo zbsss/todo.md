@@ -2,9 +2,9 @@
 id: 1782956934256-fix-all-tasks-updated-at-changes-when-single-task-is-moved
 title: Fix: all tasks `updated_at` changes when single task is moved
 status: doing
-order: 3000
+order: 2000
 created_at: 1782956934256
-updated_at: 1783008951070
+updated_at: 1783015729906
 ---
 
 I'm not 100% sure this is correct. But i noticed that sometimes when i move a single task (changer order, or column) a bunch of other tasks get their `updated_at` metadata updated, even though they should be unchanged.

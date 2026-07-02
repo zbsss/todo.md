@@ -4,7 +4,7 @@ title: Design how to release the app
 status: todo
 order: 3000
 created_at: 1782672479490
-updated_at: 1783008951059
+updated_at: 1783015729891
 ---
 
 - how to build and version the app, create releases on github, store the versioned binaries on github.

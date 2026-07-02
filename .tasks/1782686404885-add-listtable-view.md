@@ -4,7 +4,7 @@ title: Add list/table view
 status: todo
 order: 1000
 created_at: 1782686404885
-updated_at: 1783008951057
+updated_at: 1783015729888
 ---
 
 - allow sorting and filtering based on columns
