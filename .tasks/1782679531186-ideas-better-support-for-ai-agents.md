@@ -4,7 +4,7 @@ title: Idea: Better support for AI Agents
 status: done
 order: 11000
 created_at: 1782679531186
-updated_at: 1783023580806
+updated_at: 1783023876216
 pr_link: https://github.com/zbsss/todo.md/pull/23
 assignee: codex://threads/019f240b-0a1c-7ce0-9445-0b79086b7446
 ---

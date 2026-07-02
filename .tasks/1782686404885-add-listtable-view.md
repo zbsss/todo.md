@@ -2,9 +2,9 @@
 id: 1782686404885-add-listtable-view
 title: Add list/table view
 status: todo
-order: 1000
+rank: 8
 created_at: 1782686404885
-updated_at: 1783023580769
+updated_at: 1783026631717
 ---
 
 - allow sorting and filtering based on columns

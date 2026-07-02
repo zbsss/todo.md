@@ -4,7 +4,7 @@ title: Fix: When i click to edit title, it selects the whole title, instead of p
 status: done
 order: 15000
 created_at: 1782960062797
-updated_at: 1783023580811
+updated_at: 1783023876221
 ---
 
 
