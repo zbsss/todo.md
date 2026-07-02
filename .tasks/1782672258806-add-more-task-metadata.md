@@ -5,6 +5,8 @@ status: doing
 order: 3000
 created_at: 1782672258806
 updated_at: 1783023876197
+assignee: codex://threads/019f24bc-d80b-73e1-8a9c-209f82b2d46d
+pr_link: https://github.com/zbsss/todo.md/pull/26
 ---
 
 - creation time

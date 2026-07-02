@@ -53,9 +53,29 @@ pub(crate) struct Ticket {
     pub(crate) updated_at: u128,
     pub(crate) file_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) priority: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) size: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) pr_link: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) assignee: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TicketUpdate {
+    pub(crate) title: String,
+    pub(crate) body: String,
+    pub(crate) status: String,
+    #[serde(default)]
+    pub(crate) priority: Option<String>,
+    #[serde(default)]
+    pub(crate) size: Option<String>,
+    #[serde(default)]
+    pub(crate) tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

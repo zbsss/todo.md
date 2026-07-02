@@ -2,6 +2,8 @@ import type {
   MockStore,
   ProjectSummary,
   Status,
+  TaskPriority,
+  TaskSize,
   Ticket,
   TicketDraft
 } from "../app/types";
@@ -44,7 +46,10 @@ export function createMockStore() {
             rank: rankBetween(),
             createdAt: now,
             updatedAt: now,
-            filePath: "~/todo.md/projects/inbox/capture-app-ideas.md"
+            filePath: "~/todo.md/projects/inbox/capture-app-ideas.md",
+            priority: "P2",
+            size: "M",
+            tags: ["ideas", "markdown"]
           },
           {
             id: "sketch-board-columns",
@@ -55,6 +60,9 @@ export function createMockStore() {
             createdAt: now,
             updatedAt: now,
             filePath: "~/todo.md/projects/inbox/sketch-board-columns.md",
+            priority: "P1",
+            size: "S",
+            tags: ["ui"],
             prLink: "https://github.com/zbsss/todo.md/pull/22",
             assignee: "codex://threads/019f239d-dd6d-7451-856c-3847cadaf912"
           },
@@ -66,7 +74,8 @@ export function createMockStore() {
             rank: rankBetween(),
             createdAt: now,
             updatedAt: now,
-            filePath: "~/todo.md/projects/inbox/keep-tickets-local.md"
+            filePath: "~/todo.md/projects/inbox/keep-tickets-local.md",
+            tags: ["storage"]
           }
         ]
       }
@@ -194,7 +203,8 @@ export function createMockStore() {
         rank: nextRank(store.tickets[projectId] ?? [], status),
         createdAt: now,
         updatedAt: now,
-        filePath: `~/todo.md/projects/${projectId}/${id}.md`
+        filePath: `~/todo.md/projects/${projectId}/${id}.md`,
+        tags: []
       };
 
       store.tickets[projectId] = [...(store.tickets[projectId] ?? []), ticket];
@@ -205,7 +215,16 @@ export function createMockStore() {
 
       return ticket;
     },
-    async updateTicket(projectId: string, ticketId: string, title: string, body: string, status: Status) {
+    async updateTicket(
+      projectId: string,
+      ticketId: string,
+      title: string,
+      body: string,
+      status: Status,
+      priority: TaskPriority | null,
+      size: TaskSize | null,
+      tags: string[]
+    ) {
       const store = read();
       let updated: Ticket | null = null;
 
@@ -219,6 +238,9 @@ export function createMockStore() {
           title,
           body,
           status,
+          priority: priority ?? undefined,
+          size: size ?? undefined,
+          tags: cleanTags(tags),
           updatedAt: Date.now()
         };
         return updated;
@@ -304,6 +326,9 @@ export function createMockStore() {
           title,
           body,
           status: draft.status,
+          priority: draft.priority,
+          size: draft.size,
+          tags: cleanTags(draft.tags),
           updatedAt: Date.now()
         };
         return updated;
@@ -335,6 +360,9 @@ function normalizeStore(store: MockStore) {
       projectId,
       tickets.map((ticket) => ({
         ...ticket,
+        priority: isTaskPriority(ticket.priority) ? ticket.priority : undefined,
+        size: isTaskSize(ticket.size) ? ticket.size : undefined,
+        tags: cleanTags(ticket.tags ?? []),
         rank:
           ticket.rank ??
           rankFromLegacyOrder((ticket as Ticket & { order?: number }).order ?? 0, ticket.title, ticket.filePath)
@@ -343,4 +371,31 @@ function normalizeStore(store: MockStore) {
   );
 
   return store;
+}
+
+function cleanTags(value: unknown) {
+  const used = new Set<string>();
+  const tags = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [];
+
+  return tags
+    .map((tag) => String(tag).trim().replace(/\s+/g, " "))
+    .filter((tag) => tag.length > 0)
+    .filter((tag) => {
+      const key = tag.toLowerCase();
+
+      if (used.has(key)) {
+        return false;
+      }
+
+      used.add(key);
+      return true;
+    });
+}
+
+function isTaskPriority(value: unknown): value is TaskPriority {
+  return value === "P0" || value === "P1" || value === "P2" || value === "P3" || value === "P4";
+}
+
+function isTaskSize(value: unknown): value is TaskSize {
+  return value === "XS" || value === "S" || value === "M" || value === "L" || value === "XL";
 }

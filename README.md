@@ -21,4 +21,6 @@ The default bundle target is the runnable macOS `.app` bundle.
 
 todo.md creates new projects under the app data directory by default, and you can add an existing folder as a project from the sidebar. When you add an existing folder, todo.md creates a `.tasks` directory inside it and stores ticket `.md` files there. Each ticket file has small frontmatter for board metadata and normal Markdown content beneath it.
 
+Tickets can include task metadata in frontmatter with `priority`, `size`, and comma-separated `tags`.
+
 Optional agent metadata can also be stored in ticket frontmatter with `pr_link` and `assignee`. `assignee` supports Codex thread deep links such as `codex://threads/<thread-id>`.

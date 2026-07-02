@@ -687,6 +687,66 @@ select:focus {
   color: #1f5860;
 }
 
+.ticket-task-metadata {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 9px;
+}
+
+.task-chip {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 22px;
+  align-items: center;
+  overflow: hidden;
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-size: 0.7rem;
+  font-weight: 820;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-chip-priority,
+.task-selector-mark-priority {
+  background: #eef0e8;
+  color: #48483f;
+}
+
+.task-priority-p0 {
+  background: #ffe0df;
+  color: #873333;
+}
+
+.task-priority-p1 {
+  background: #f8e6c8;
+  color: #744810;
+}
+
+.task-priority-p2 {
+  background: #e2ebff;
+  color: #27457e;
+}
+
+.task-priority-p3 {
+  background: #dcefe6;
+  color: #174b3e;
+}
+
+.task-priority-p4 {
+  background: #e9e1ff;
+  color: #57418d;
+}
+
+.task-chip-tag {
+  border: 1px solid rgba(35, 108, 90, 0.18);
+  background: #edf6f1;
+  color: var(--accent-strong);
+}
+
 .ticket-metadata {
   display: flex;
   min-width: 0;
@@ -1025,6 +1085,42 @@ select:focus {
   box-shadow: none;
 }
 
+.ticket-timestamps {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.editor-metadata-controls {
+  display: flex;
+  max-width: min(760px, 100%);
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+  margin-top: 12px;
+}
+
+.tag-editor {
+  display: grid;
+  width: min(320px, 100%);
+  min-width: 210px;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 780;
+}
+
+.tag-editor input {
+  height: 38px;
+  font-size: 0.88rem;
+}
+
 .editor-actions {
   display: flex;
   gap: 8px;
@@ -1035,6 +1131,14 @@ select:focus {
   position: relative;
   width: 146px;
   flex: 0 0 auto;
+}
+
+.task-selector-priority {
+  width: 118px;
+}
+
+.task-selector-size {
+  width: 96px;
 }
 
 .status-selector-button {
@@ -1090,6 +1194,18 @@ select:focus {
   border-radius: 7px;
   background: rgba(35, 108, 90, 0.1);
   color: var(--accent);
+}
+
+.task-selector-mark-priority,
+.task-selector-mark-size {
+  font-size: 0.68rem;
+  font-weight: 880;
+  letter-spacing: 0;
+}
+
+.task-selector-mark-size {
+  background: #f7f2e8;
+  color: #5d594f;
 }
 
 .status-icon-doing {

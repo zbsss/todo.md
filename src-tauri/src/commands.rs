@@ -8,7 +8,7 @@ use crate::{
     },
     models::{
         ProjectDiskMeta, ProjectRecord, ProjectSummary, SavedTicketImage, Ticket, TicketPosition,
-        WorkspaceInfo,
+        TicketUpdate, WorkspaceInfo,
     },
     paths::{canonical_project_path, default_projects_dir, ensure_tasks_dir},
     projects::{
@@ -220,6 +220,9 @@ pub(crate) fn create_ticket(
         created_at: now,
         updated_at: now,
         file_path: String::new(),
+        priority: None,
+        size: None,
+        tags: Vec::new(),
         pr_link: None,
         assignee: None,
     };
@@ -232,17 +235,18 @@ pub(crate) fn update_ticket(
     app: AppHandle,
     project_id: String,
     ticket_id: String,
-    title: String,
-    body: String,
-    status: String,
+    update: TicketUpdate,
 ) -> Result<Ticket, String> {
-    validate_status(&status)?;
+    validate_status(&update.status)?;
     let project_dir = project_dir(&app, &project_id)?;
     let mut ticket = read_ticket(&project_dir, &ticket_id)?;
 
-    ticket.title = clean_title(&title);
-    ticket.body = normalize_newlines(&body).trim_end().to_string();
-    ticket.status = status;
+    ticket.title = clean_title(&update.title);
+    ticket.body = normalize_newlines(&update.body).trim_end().to_string();
+    ticket.status = update.status;
+    ticket.priority = update.priority;
+    ticket.size = update.size;
+    ticket.tags = update.tags;
     ticket.updated_at = now_millis();
 
     write_ticket(&project_dir, ticket)

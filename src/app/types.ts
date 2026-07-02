@@ -1,5 +1,9 @@
 export type Status = "todo" | "doing" | "done";
 
+export type TaskPriority = "P0" | "P1" | "P2" | "P3" | "P4";
+
+export type TaskSize = "XS" | "S" | "M" | "L" | "XL";
+
 export type ProjectSummary = {
   id: string;
   name: string;
@@ -21,6 +25,9 @@ export type Ticket = {
   createdAt: number;
   updatedAt: number;
   filePath: string;
+  priority?: TaskPriority;
+  size?: TaskSize;
+  tags?: string[];
   prLink?: string;
   assignee?: string;
 };
@@ -30,6 +37,9 @@ export type TicketDraft = {
   title: string;
   body: string;
   status: Status;
+  priority?: TaskPriority;
+  size?: TaskSize;
+  tags: string[];
   pastedImages: string[];
 };
 

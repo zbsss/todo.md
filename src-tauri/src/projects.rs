@@ -120,6 +120,9 @@ pub(crate) fn seed_project(project_dir: &Path) -> Result<(), String> {
             created_at: now,
             updated_at: now,
             file_path: String::new(),
+            priority: None,
+            size: None,
+            tags: Vec::new(),
             pr_link: None,
             assignee: None,
         };
