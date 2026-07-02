@@ -55,6 +55,8 @@ import type {
   SaveDraftOptions,
   ScrollSnapshot,
   Status,
+  TaskPriority,
+  TaskSize,
   Ticket,
   TicketDraft,
   WorkspaceInfo
@@ -75,6 +77,12 @@ const columns: Array<{ id: Status; label: string; icon: string }> = [
   { id: "doing", label: "Doing", icon: "loader-circle" },
   { id: "done", label: "Done", icon: "circle-check" }
 ];
+const priorities: TaskPriority[] = ["P0", "P1", "P2", "P3", "P4"];
+const taskSizes: TaskSize[] = ["XS", "S", "M", "L", "XL"];
+const taskDateTimeFormatter = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short"
+});
 
 const app = document.querySelector<HTMLDivElement>("#app");
 
@@ -150,6 +158,7 @@ let ticketDropCleanupFrameId: number | null = null;
 
 async function main() {
   bindGlobalKeys();
+  bindLayoutGuards();
   await bindWindowCloseGuards();
   await loadWorkspace();
 }
@@ -252,6 +261,7 @@ function render(options: RenderOptions = {}) {
 
   hydrateIcons();
   bindEvents();
+  applyCardPreviewPrecedence();
   restoreScrollSnapshot(scrollSnapshot);
 
   if (options.revealTicket) {
@@ -491,17 +501,74 @@ function renderTicketCard(ticket: Ticket) {
       draggable="true"
       data-ticket-id="${escapeAttr(ticket.id)}"
       tabindex="0"
-      aria-label="${escapeAttr(ticket.title)}"
+      aria-label="${escapeAttr(ticketCardAriaLabel(ticket))}"
       aria-keyshortcuts="Enter ArrowUp ArrowDown"
     >
       <div class="ticket-topline">
         <h4>${renderTicketTitle(ticket.title)}</h4>
         <span class="drag-handle" title="Drag to reorder">${icon("grip-vertical")}</span>
       </div>
+      ${renderTicketTaskMetadata(ticket)}
       ${renderTicketMetadata(ticket)}
       ${renderedBody ? `<div class="markdown card-markdown">${renderedBody}</div>` : ""}
     </article>
   `;
+}
+
+function ticketCardAriaLabel(ticket: Ticket) {
+  const parts = [ticket.title];
+
+  if (ticket.priority) {
+    parts.push(`Priority ${ticket.priority}`);
+  }
+
+  if (ticket.size) {
+    parts.push(`Size ${ticket.size}`);
+  }
+
+  return parts.join(". ");
+}
+
+function applyCardPreviewPrecedence() {
+  document.querySelectorAll<HTMLElement>(".ticket-card").forEach((card) => {
+    const metadata = card.querySelector<HTMLElement>(".ticket-task-metadata");
+    const preview = card.querySelector<HTMLElement>(".card-markdown");
+
+    if (!metadata || !preview) {
+      return;
+    }
+
+    preview.hidden = taskMetadataWraps(metadata);
+  });
+}
+
+function taskMetadataWraps(metadata: HTMLElement) {
+  const firstChip = metadata.querySelector<HTMLElement>(".task-chip");
+
+  if (!firstChip) {
+    return false;
+  }
+
+  const metadataHeight = metadata.getBoundingClientRect().height;
+  const chipHeight = firstChip.getBoundingClientRect().height;
+  const rowGap = parseFloat(window.getComputedStyle(metadata).rowGap || "0") || 0;
+
+  return metadataHeight > chipHeight + rowGap + 2;
+}
+
+function renderTicketTaskMetadata(ticket: Ticket) {
+  const chips = [
+    ticket.priority
+      ? `<span class="task-chip task-chip-priority task-priority-${ticket.priority.toLowerCase()}" title="Priority ${ticket.priority}">${escapeHtml(ticket.priority)}</span>`
+      : "",
+    ticket.size ? `<span class="task-chip task-chip-size" title="Size ${ticket.size}">${escapeHtml(ticket.size)}</span>` : ""
+  ].filter(Boolean);
+
+  if (!chips.length) {
+    return "";
+  }
+
+  return `<div class="ticket-task-metadata" aria-label="Task priority and size">${chips.join("")}</div>`;
 }
 
 type TicketMetadataItem = {
@@ -648,7 +715,18 @@ function renderEditor() {
               aria-label="Title"
               hidden
             />
+            ${renderTicketTimestamps(ticket)}
             ${renderTicketMetadata(ticket)}
+            <div class="editor-metadata-controls" aria-label="Task metadata">
+              <div class="editor-metadata-field editor-selector-field editor-priority-field">
+                <span>Priority</span>
+                ${renderTaskSelector("priority", state.draft.priority)}
+              </div>
+              <div class="editor-metadata-field editor-selector-field editor-size-field">
+                <span>Size</span>
+                ${renderTaskSelector("size", state.draft.size)}
+              </div>
+            </div>
           </div>
           <div class="editor-actions">
             ${renderStatusSelector(state.draft.status)}
@@ -678,47 +756,159 @@ function renderEditor() {
   `;
 }
 
+function renderTicketTimestamps(ticket: Ticket) {
+  return `
+    <div class="ticket-timestamps" aria-label="Task timestamps">
+      <span>Created ${escapeHtml(formatTicketTimestamp(ticket.createdAt))}</span>
+      <span>Updated ${escapeHtml(formatTicketTimestamp(ticket.updatedAt))}</span>
+    </div>
+  `;
+}
+
 function renderStatusSelector(status: Status) {
-  const selected = columnForStatus(status);
+  return renderTaskSelector("status", status);
+}
+
+type TaskSelectorKind = "status" | "priority" | "size";
+
+type TaskSelectorOption = {
+  value: string;
+  label: string;
+  icon?: string;
+};
+
+function renderTaskSelector(kind: TaskSelectorKind, value: string | undefined) {
+  const config = taskSelectorConfig(kind);
+  const selected = selectedTaskSelectorOption(kind, value);
+  const isCompactCurrentValue = isCompactTaskSelectorCurrentValue(kind);
+  const currentLabel = taskSelectorCurrentLabel(kind, selected, config.placeholder);
 
   return `
-    <div class="status-selector" data-status-selector>
+    <div class="status-selector task-selector task-selector-${kind}" data-task-selector data-selector-kind="${kind}">
       <button
         type="button"
         class="status-selector-button"
-        data-action="toggle-status-selector"
+        data-action="toggle-task-selector"
         aria-haspopup="menu"
         aria-expanded="false"
-        aria-label="Status: ${selected.label}. Change status"
+        aria-label="${escapeAttr(`${config.label}: ${selected.label}. Change ${config.label.toLowerCase()}`)}"
       >
-        <span class="status-current">
-          <span class="status-current-icon status-icon-${selected.id}" data-status-current-icon>${icon(selected.icon)}</span>
-          <span data-status-current-label>${selected.label}</span>
+        <span class="status-current ${isCompactCurrentValue ? "is-chip-only" : ""}">
+          <span class="${escapeAttr(taskSelectorMarkClass(kind, selected.value))}" data-task-current-mark>${renderTaskSelectorMark(kind, selected)}</span>
+          <span data-task-current-label ${isCompactCurrentValue ? "hidden" : ""}>${escapeHtml(currentLabel)}</span>
         </span>
         <span class="status-chevron">${icon("chevron-down")}</span>
       </button>
-      <div class="status-menu" role="menu" aria-label="Change status">
-        ${columns
-          .map(
-            (column) => `
+      <div class="status-menu" role="menu" aria-label="${escapeAttr(`Change ${config.label.toLowerCase()}`)}">
+        ${config.options
+          .map((option) => {
+            const isSelected = option.value === selected.value;
+            const isChipOnlyOption = isCompactTaskSelectorCurrentValue(kind);
+
+            return `
               <button
                 type="button"
-                class="status-option ${column.id === status ? "selected" : ""}"
-                data-action="choose-status"
-                data-status-value="${column.id}"
+                class="status-option ${isSelected ? "selected" : ""}"
+                data-action="choose-task-selector"
+                data-selector-value="${escapeAttr(option.value)}"
                 role="menuitemradio"
-                aria-checked="${column.id === status ? "true" : "false"}"
+                aria-checked="${isSelected ? "true" : "false"}"
               >
-                <span class="status-option-icon status-icon-${column.id}">${icon(column.icon)}</span>
-                <span>${column.label}</span>
-                <span class="status-option-check">${column.id === status ? icon("check") : ""}</span>
+                <span class="${escapeAttr(taskSelectorMarkClass(kind, option.value))}">${renderTaskSelectorMark(kind, option)}</span>
+                <span ${isChipOnlyOption ? "hidden" : ""}>${escapeHtml(option.label)}</span>
+                <span class="status-option-check">${isSelected ? icon("check") : ""}</span>
               </button>
-            `
-          )
+            `;
+          })
           .join("")}
       </div>
     </div>
   `;
+}
+
+function taskSelectorConfig(kind: TaskSelectorKind): {
+  label: string;
+  placeholder: string;
+  options: TaskSelectorOption[];
+} {
+  if (kind === "status") {
+    return {
+      label: "Status",
+      placeholder: "Status",
+      options: columns.map((column) => ({
+        value: column.id,
+        label: column.label,
+        icon: column.icon
+      }))
+    };
+  }
+
+  if (kind === "priority") {
+    return {
+      label: "Priority",
+      placeholder: "Priority",
+      options: [{ value: "", label: "None" }, ...priorities.map((priority) => ({ value: priority, label: priority }))]
+    };
+  }
+
+  return {
+    label: "Size",
+    placeholder: "Size",
+    options: [{ value: "", label: "None" }, ...taskSizes.map((size) => ({ value: size, label: size }))]
+  };
+}
+
+function selectedTaskSelectorOption(kind: TaskSelectorKind, value: string | undefined) {
+  const config = taskSelectorConfig(kind);
+  const selected = config.options.find((option) => option.value === (value ?? ""));
+
+  return selected ?? config.options[0];
+}
+
+function isCompactTaskSelectorCurrentValue(kind: TaskSelectorKind) {
+  return kind !== "status";
+}
+
+function taskSelectorCurrentLabel(kind: TaskSelectorKind, option: TaskSelectorOption, placeholder: string) {
+  if (isCompactTaskSelectorCurrentValue(kind)) {
+    return "";
+  }
+
+  return option.value ? option.label : option.label || placeholder;
+}
+
+function renderTaskSelectorMark(kind: TaskSelectorKind, option: TaskSelectorOption) {
+  if (option.icon) {
+    return icon(option.icon);
+  }
+
+  if (kind === "priority") {
+    return escapeHtml(option.value || "None");
+  }
+
+  if (kind === "size") {
+    return escapeHtml(option.value || "None");
+  }
+
+  return "";
+}
+
+function taskSelectorMarkClass(kind: TaskSelectorKind, value: string) {
+  const classes = ["status-current-icon", "status-option-icon", `task-selector-mark-${kind}`];
+
+  if (kind === "status" && value) {
+    classes.push(`status-icon-${value}`);
+  }
+
+  if (kind === "priority" && value) {
+    classes.push(`task-priority-${value.toLowerCase()}`);
+  }
+
+  if (kind !== "status" && !value) {
+    classes.push("task-selector-mark-none");
+  }
+
+  return classes.join(" ");
 }
 
 function bindEvents() {
@@ -1446,7 +1636,7 @@ function bindEditorEvents() {
   const panel = document.querySelector<HTMLElement>(".editor-panel");
   const titleInput = document.querySelector<HTMLInputElement>('.editor-panel input[name="title"]');
   const editorRoot = document.querySelector<HTMLElement>("[data-editor-root]");
-  const statusSelector = document.querySelector<HTMLElement>("[data-status-selector]");
+  const taskSelectors = Array.from(document.querySelectorAll<HTMLElement>("[data-task-selector]"));
 
   if (editorRoot && state.draft) {
     mountMarkdownEditor(editorRoot, state.draft.body);
@@ -1470,11 +1660,9 @@ function bindEditorEvents() {
 
   panel?.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
-    const clickedStatusSelector = target.closest<HTMLElement>("[data-status-selector]");
+    const clickedTaskSelector = target.closest<HTMLElement>("[data-task-selector]");
 
-    if (!clickedStatusSelector) {
-      closeStatusSelector(statusSelector);
-    }
+    closeTaskSelectorsExcept(clickedTaskSelector);
 
     const actionButton = target.closest<HTMLButtonElement>("button[data-action]");
 
@@ -1484,13 +1672,13 @@ function bindEditorEvents() {
 
     const action = actionButton.dataset.action;
 
-    if (action === "toggle-status-selector") {
-      toggleStatusSelector(actionButton.closest<HTMLElement>("[data-status-selector]"));
+    if (action === "toggle-task-selector") {
+      toggleTaskSelector(actionButton.closest<HTMLElement>("[data-task-selector]"));
       return;
     }
 
-    if (action === "choose-status") {
-      chooseDraftStatus(actionButton.dataset.statusValue, actionButton);
+    if (action === "choose-task-selector") {
+      chooseDraftSelectorValue(actionButton.dataset.selectorValue, actionButton);
       return;
     }
 
@@ -1534,16 +1722,18 @@ function bindEditorEvents() {
     }
   });
 
-  statusSelector?.addEventListener("keydown", (event) => {
-    handleStatusSelectorKeydown(event, statusSelector);
-  });
+  taskSelectors.forEach((selector) => {
+    selector.addEventListener("keydown", (event) => {
+      handleTaskSelectorKeydown(event, selector);
+    });
 
-  statusSelector?.addEventListener("focusout", (event) => {
-    const nextTarget = event.relatedTarget as Node | null;
+    selector.addEventListener("focusout", (event) => {
+      const nextTarget = event.relatedTarget as Node | null;
 
-    if (!nextTarget || !statusSelector.contains(nextTarget)) {
-      closeStatusSelector(statusSelector);
-    }
+      if (!nextTarget || !selector.contains(nextTarget)) {
+        closeTaskSelector(selector);
+      }
+    });
   });
 }
 
@@ -1706,7 +1896,7 @@ function bindGlobalKeys() {
       return;
     }
 
-    if (event.key === "Escape" && closeStatusSelector()) {
+    if (event.key === "Escape" && closeTaskSelector()) {
       event.preventDefault();
       return;
     }
@@ -1719,6 +1909,12 @@ function bindGlobalKeys() {
       event.preventDefault();
       void saveDraft({ flush: true });
     }
+  });
+}
+
+function bindLayoutGuards() {
+  window.addEventListener("resize", () => {
+    applyCardPreviewPrecedence();
   });
 }
 
@@ -1735,6 +1931,8 @@ function openEditor(ticketId: string) {
     title: ticket.title,
     body: ticket.body,
     status: ticket.status,
+    priority: ticket.priority,
+    size: ticket.size,
     pastedImages: []
   };
   state.draftSaveError = null;
@@ -1783,6 +1981,8 @@ function hasUnsavedDraft() {
     ticket.title !== normalizeDraftTitle(state.draft.title) ||
     ticket.body !== normalizeDraftBody(state.draft.body) ||
     ticket.status !== state.draft.status ||
+    ticket.priority !== state.draft.priority ||
+    ticket.size !== state.draft.size ||
     state.draft.pastedImages.length > 0
   );
 }
@@ -1872,11 +2072,13 @@ async function persistCurrentDraft() {
   const title = normalizeDraftTitle(draft.title);
   const body = normalizeDraftBody(draft.body);
   const status = draft.status;
+  const priority = normalizeDraftPriority(draft.priority) ?? null;
+  const size = normalizeDraftSize(draft.size) ?? null;
   const imagePaths = [...draft.pastedImages];
   const unusedImages = unusedDraftImages(draft);
   await cleanupTicketImages(projectId, unusedImages);
 
-  const updated = await api.updateTicket(projectId, ticketId, title, body, status);
+  const updated = await api.updateTicket(projectId, ticketId, title, body, status, priority, size);
 
   clearDraftSaveError();
   state.tickets = state.tickets.map((ticket) => (ticket.id === updated.id ? updated : ticket)).sort(sortTickets);
@@ -2482,73 +2684,175 @@ function isStatus(value: string | undefined): value is Status {
   return columns.some((column) => column.id === value);
 }
 
-function toggleStatusSelector(selector: HTMLElement | null) {
+function isTaskSelectorKind(value: string | undefined): value is TaskSelectorKind {
+  return value === "status" || value === "priority" || value === "size";
+}
+
+function isTaskPriority(value: string | undefined): value is TaskPriority {
+  return priorities.some((priority) => priority === value);
+}
+
+function isTaskSize(value: string | undefined): value is TaskSize {
+  return taskSizes.some((size) => size === value);
+}
+
+function normalizeDraftPriority(value: string | undefined): TaskPriority | undefined {
+  const normalized = value?.toUpperCase();
+
+  return isTaskPriority(normalized) ? normalized : undefined;
+}
+
+function normalizeDraftSize(value: string | undefined): TaskSize | undefined {
+  const normalized = value?.toUpperCase();
+
+  return isTaskSize(normalized) ? normalized : undefined;
+}
+
+function formatTicketTimestamp(value: number) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Unknown";
+  }
+
+  return taskDateTimeFormatter.format(date);
+}
+
+function toggleTaskSelector(selector: HTMLElement | null) {
   if (!selector) {
     return;
   }
 
-  setStatusSelectorOpen(selector, !selector.classList.contains("is-open"));
+  closeTaskSelectorsExcept(selector);
+  setTaskSelectorOpen(selector, !selector.classList.contains("is-open"));
 }
 
-function closeStatusSelector(selector?: HTMLElement | null) {
-  const target = selector ?? document.querySelector<HTMLElement>("[data-status-selector].is-open");
+function closeTaskSelector(selector?: HTMLElement | null) {
+  const target = selector ?? document.querySelector<HTMLElement>("[data-task-selector].is-open");
 
   if (!target?.classList.contains("is-open")) {
     return false;
   }
 
-  setStatusSelectorOpen(target, false);
+  setTaskSelectorOpen(target, false);
   return true;
 }
 
-function setStatusSelectorOpen(selector: HTMLElement, isOpen: boolean) {
+function closeTaskSelectorsExcept(activeSelector: HTMLElement | null) {
+  document.querySelectorAll<HTMLElement>("[data-task-selector].is-open").forEach((selector) => {
+    if (selector !== activeSelector) {
+      setTaskSelectorOpen(selector, false);
+    }
+  });
+}
+
+function setTaskSelectorOpen(selector: HTMLElement, isOpen: boolean) {
   selector.classList.toggle("is-open", isOpen);
   selector.querySelector<HTMLButtonElement>(".status-selector-button")?.setAttribute("aria-expanded", String(isOpen));
 
   if (isOpen) {
-    focusSelectedStatusOption(selector);
+    focusSelectedTaskSelectorOption(selector);
   }
 }
 
-function chooseDraftStatus(value: string | undefined, source: HTMLElement) {
-  if (!isStatus(value) || !state.draft) {
+function chooseDraftSelectorValue(value: string | undefined, source: HTMLElement) {
+  const selector = source.closest<HTMLElement>("[data-task-selector]");
+  const kind = selector?.dataset.selectorKind as TaskSelectorKind | undefined;
+
+  if (!selector || !isTaskSelectorKind(kind) || !state.draft) {
     return;
   }
 
-  if (state.draft.status !== value) {
-    state.draft.status = value;
+  const updated = updateDraftSelectorValue(kind, value ?? "");
+
+  if (updated) {
     scheduleDraftSave();
   }
 
-  const selector = source.closest<HTMLElement>("[data-status-selector]");
-  updateStatusSelector(selector, value);
-  closeStatusSelector(selector);
+  updateTaskSelector(selector, kind, selectorValueForKind(kind));
+  closeTaskSelector(selector);
   selector?.querySelector<HTMLButtonElement>(".status-selector-button")?.focus();
 }
 
-function updateStatusSelector(selector: HTMLElement | null, status: Status) {
+function updateDraftSelectorValue(kind: TaskSelectorKind, value: string) {
+  if (!state.draft) {
+    return false;
+  }
+
+  if (kind === "status") {
+    if (!isStatus(value) || state.draft.status === value) {
+      return false;
+    }
+
+    state.draft.status = value;
+    return true;
+  }
+
+  if (kind === "priority") {
+    const priority = normalizeDraftPriority(value);
+
+    if (state.draft.priority === priority) {
+      return false;
+    }
+
+    state.draft.priority = priority;
+    return true;
+  }
+
+  const size = normalizeDraftSize(value);
+
+  if (state.draft.size === size) {
+    return false;
+  }
+
+  state.draft.size = size;
+  return true;
+}
+
+function selectorValueForKind(kind: TaskSelectorKind) {
+  if (!state.draft) {
+    return "";
+  }
+
+  if (kind === "status") {
+    return state.draft.status;
+  }
+
+  if (kind === "priority") {
+    return state.draft.priority ?? "";
+  }
+
+  return state.draft.size ?? "";
+}
+
+function updateTaskSelector(selector: HTMLElement | null, kind: TaskSelectorKind, value: string) {
   if (!selector) {
     return;
   }
 
-  const selected = columnForStatus(status);
-  const currentIcon = selector.querySelector<HTMLElement>("[data-status-current-icon]");
-  const currentLabel = selector.querySelector<HTMLElement>("[data-status-current-label]");
+  const config = taskSelectorConfig(kind);
+  const selected = selectedTaskSelectorOption(kind, value);
+  const isCompactCurrentValue = isCompactTaskSelectorCurrentValue(kind);
+  const current = selector.querySelector<HTMLElement>(".status-current");
+  const currentMark = selector.querySelector<HTMLElement>("[data-task-current-mark]");
+  const currentLabel = selector.querySelector<HTMLElement>("[data-task-current-label]");
   const trigger = selector.querySelector<HTMLButtonElement>(".status-selector-button");
 
-  trigger?.setAttribute("aria-label", `Status: ${selected.label}. Change status`);
+  trigger?.setAttribute("aria-label", `${config.label}: ${selected.label}. Change ${config.label.toLowerCase()}`);
+  current?.classList.toggle("is-chip-only", isCompactCurrentValue);
 
-  if (currentIcon) {
-    currentIcon.className = `status-current-icon status-icon-${selected.id}`;
-    currentIcon.innerHTML = icon(selected.icon);
+  if (currentMark) {
+    currentMark.className = taskSelectorMarkClass(kind, selected.value);
+    currentMark.innerHTML = renderTaskSelectorMark(kind, selected);
   }
 
   if (currentLabel) {
-    currentLabel.textContent = selected.label;
+    currentLabel.hidden = isCompactCurrentValue;
+    currentLabel.textContent = taskSelectorCurrentLabel(kind, selected, config.placeholder);
   }
 
   selector.querySelectorAll<HTMLButtonElement>(".status-option").forEach((option) => {
-    const isSelected = option.dataset.statusValue === status;
+    const isSelected = option.dataset.selectorValue === selected.value;
     option.classList.toggle("selected", isSelected);
     option.setAttribute("aria-checked", String(isSelected));
 
@@ -2562,7 +2866,7 @@ function updateStatusSelector(selector: HTMLElement | null, status: Status) {
   hydrateIcons();
 }
 
-function handleStatusSelectorKeydown(event: KeyboardEvent, selector: HTMLElement) {
+function handleTaskSelectorKeydown(event: KeyboardEvent, selector: HTMLElement) {
   const options = Array.from(selector.querySelectorAll<HTMLButtonElement>(".status-option"));
 
   if (!options.length) {
@@ -2572,7 +2876,7 @@ function handleStatusSelectorKeydown(event: KeyboardEvent, selector: HTMLElement
   if (event.key === "Escape" && selector.classList.contains("is-open")) {
     event.preventDefault();
     event.stopPropagation();
-    closeStatusSelector(selector);
+    closeTaskSelector(selector);
     selector.querySelector<HTMLButtonElement>(".status-selector-button")?.focus();
     return;
   }
@@ -2582,18 +2886,18 @@ function handleStatusSelectorKeydown(event: KeyboardEvent, selector: HTMLElement
     event.stopPropagation();
 
     if (!selector.classList.contains("is-open")) {
-      setStatusSelectorOpen(selector, true);
+      setTaskSelectorOpen(selector, true);
       return;
     }
 
-    focusStatusOption(selector, event.key === "ArrowDown" ? 1 : -1);
+    focusTaskSelectorOption(selector, event.key === "ArrowDown" ? 1 : -1);
     return;
   }
 
   if (event.key === "Home" || event.key === "End") {
     event.preventDefault();
     event.stopPropagation();
-    setStatusSelectorOpen(selector, true);
+    setTaskSelectorOpen(selector, true);
     options[event.key === "Home" ? 0 : options.length - 1]?.focus();
     return;
   }
@@ -2601,18 +2905,21 @@ function handleStatusSelectorKeydown(event: KeyboardEvent, selector: HTMLElement
   if ((event.key === "Enter" || event.key === " ") && document.activeElement?.classList.contains("status-option")) {
     event.preventDefault();
     event.stopPropagation();
-    chooseDraftStatus((document.activeElement as HTMLElement).dataset.statusValue, document.activeElement as HTMLElement);
+    chooseDraftSelectorValue(
+      (document.activeElement as HTMLElement).dataset.selectorValue,
+      document.activeElement as HTMLElement
+    );
   }
 }
 
-function focusSelectedStatusOption(selector: HTMLElement) {
+function focusSelectedTaskSelectorOption(selector: HTMLElement) {
   (
     selector.querySelector<HTMLButtonElement>(".status-option.selected") ??
     selector.querySelector<HTMLButtonElement>(".status-option")
   )?.focus();
 }
 
-function focusStatusOption(selector: HTMLElement, offset: -1 | 1) {
+function focusTaskSelectorOption(selector: HTMLElement, offset: -1 | 1) {
   const options = Array.from(selector.querySelectorAll<HTMLButtonElement>(".status-option"));
   const currentIndex = options.findIndex((option) => option === document.activeElement);
   const selectedIndex = options.findIndex((option) => option.classList.contains("selected"));

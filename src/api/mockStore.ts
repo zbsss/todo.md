@@ -2,6 +2,8 @@ import type {
   MockStore,
   ProjectSummary,
   Status,
+  TaskPriority,
+  TaskSize,
   Ticket,
   TicketDraft
 } from "../app/types";
@@ -44,7 +46,9 @@ export function createMockStore() {
             rank: rankBetween(),
             createdAt: now,
             updatedAt: now,
-            filePath: "~/todo.md/projects/inbox/capture-app-ideas.md"
+            filePath: "~/todo.md/projects/inbox/capture-app-ideas.md",
+            priority: "P2",
+            size: "M"
           },
           {
             id: "sketch-board-columns",
@@ -55,6 +59,8 @@ export function createMockStore() {
             createdAt: now,
             updatedAt: now,
             filePath: "~/todo.md/projects/inbox/sketch-board-columns.md",
+            priority: "P1",
+            size: "S",
             prLink: "https://github.com/zbsss/todo.md/pull/22",
             assignee: "codex://threads/019f239d-dd6d-7451-856c-3847cadaf912"
           },
@@ -205,7 +211,15 @@ export function createMockStore() {
 
       return ticket;
     },
-    async updateTicket(projectId: string, ticketId: string, title: string, body: string, status: Status) {
+    async updateTicket(
+      projectId: string,
+      ticketId: string,
+      title: string,
+      body: string,
+      status: Status,
+      priority: TaskPriority | null,
+      size: TaskSize | null
+    ) {
       const store = read();
       let updated: Ticket | null = null;
 
@@ -219,6 +233,8 @@ export function createMockStore() {
           title,
           body,
           status,
+          priority: priority ?? undefined,
+          size: size ?? undefined,
           updatedAt: Date.now()
         };
         return updated;
@@ -304,6 +320,8 @@ export function createMockStore() {
           title,
           body,
           status: draft.status,
+          priority: draft.priority,
+          size: draft.size,
           updatedAt: Date.now()
         };
         return updated;
@@ -333,14 +351,26 @@ function normalizeStore(store: MockStore) {
   store.tickets = Object.fromEntries(
     Object.entries(store.tickets).map(([projectId, tickets]) => [
       projectId,
-      tickets.map((ticket) => ({
-        ...ticket,
-        rank:
-          ticket.rank ??
-          rankFromLegacyOrder((ticket as Ticket & { order?: number }).order ?? 0, ticket.title, ticket.filePath)
-      }))
+      tickets.map((ticket) => {
+        const { order, tags: _tags, ...ticketWithoutTags } = ticket as Ticket & { order?: number; tags?: unknown };
+
+        return {
+          ...ticketWithoutTags,
+          priority: isTaskPriority(ticket.priority) ? ticket.priority : undefined,
+          size: isTaskSize(ticket.size) ? ticket.size : undefined,
+          rank: ticket.rank ?? rankFromLegacyOrder(order ?? 0, ticket.title, ticket.filePath)
+        };
+      })
     ])
   );
 
   return store;
+}
+
+function isTaskPriority(value: unknown): value is TaskPriority {
+  return value === "P0" || value === "P1" || value === "P2" || value === "P3" || value === "P4";
+}
+
+function isTaskSize(value: unknown): value is TaskSize {
+  return value === "XS" || value === "S" || value === "M" || value === "L" || value === "XL";
 }

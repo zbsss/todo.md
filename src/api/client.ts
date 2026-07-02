@@ -3,6 +3,8 @@ import type {
   ProjectSummary,
   SavedTicketImage,
   Status,
+  TaskPriority,
+  TaskSize,
   Ticket,
   TicketDraft,
   WorkspaceInfo
@@ -27,7 +29,15 @@ export type TodoApi = {
   openExternalLink(url: string): Promise<void>;
   listTickets(projectId: string): Promise<Ticket[]>;
   createTicket(projectId: string, status: Status, title: string): Promise<Ticket>;
-  updateTicket(projectId: string, ticketId: string, title: string, body: string, status: Status): Promise<Ticket>;
+  updateTicket(
+    projectId: string,
+    ticketId: string,
+    title: string,
+    body: string,
+    status: Status,
+    priority: TaskPriority | null,
+    size: TaskSize | null
+  ): Promise<Ticket>;
   saveTicketImage(projectId: string, ticketId: string, mimeType: string, bytes: number[]): Promise<SavedTicketImage>;
   deleteTicketImage(projectId: string, markdownPath: string): Promise<void>;
   reorderTickets(projectId: string, positions: Array<{ id: string; status: Status; rank: string }>): Promise<Ticket[]>;
@@ -112,12 +122,30 @@ export function createApi({ isTauriRuntime, mockStore = createMockStore() }: Cre
 
       return mockStore.createTicket(projectId, status, title);
     },
-    async updateTicket(projectId: string, ticketId: string, title: string, body: string, status: Status) {
+    async updateTicket(
+      projectId: string,
+      ticketId: string,
+      title: string,
+      body: string,
+      status: Status,
+      priority: TaskPriority | null,
+      size: TaskSize | null
+    ) {
       if (isTauriRuntime) {
-        return invoke<Ticket>("update_ticket", { projectId, ticketId, title, body, status });
+        return invoke<Ticket>("update_ticket", {
+          projectId,
+          ticketId,
+          update: {
+            title,
+            body,
+            status,
+            priority,
+            size
+          }
+        });
       }
 
-      return mockStore.updateTicket(projectId, ticketId, title, body, status);
+      return mockStore.updateTicket(projectId, ticketId, title, body, status, priority, size);
     },
     async saveTicketImage(projectId: string, ticketId: string, mimeType: string, bytes: number[]) {
       if (isTauriRuntime) {

@@ -14,6 +14,8 @@ use crate::{
 const RANK_ALPHABET: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 const MIN_RANK_DIGIT: char = '0';
 const MIN_RANK_BYTE: u8 = b'0';
+const PRIORITIES: &[&str] = &["P0", "P1", "P2", "P3", "P4"];
+const SIZES: &[&str] = &["XS", "S", "M", "L", "XL"];
 
 pub(crate) fn list_tickets_from_disk(project_dir: &Path) -> Result<Vec<Ticket>, String> {
     let mut tickets = Vec::new();
@@ -96,6 +98,14 @@ pub(crate) fn write_ticket(project_dir: &Path, mut ticket: Ticket) -> Result<Tic
         .assignee
         .take()
         .and_then(|value| clean_metadata_value(&value));
+    ticket.priority = ticket
+        .priority
+        .take()
+        .and_then(|value| clean_enum_value(&value, PRIORITIES));
+    ticket.size = ticket
+        .size
+        .take()
+        .and_then(|value| clean_enum_value(&value, SIZES));
 
     let path = ticket_write_path(&tasks_dir, &ticket)?;
     let body = ticket.body.trim_end();
@@ -105,6 +115,8 @@ pub(crate) fn write_ticket(project_dir: &Path, mut ticket: Ticket) -> Result<Tic
     );
     append_optional_frontmatter(&mut contents, "pr_link", ticket.pr_link.as_deref());
     append_optional_frontmatter(&mut contents, "assignee", ticket.assignee.as_deref());
+    append_optional_frontmatter(&mut contents, "priority", ticket.priority.as_deref());
+    append_optional_frontmatter(&mut contents, "size", ticket.size.as_deref());
     contents.push_str("---\n\n");
     contents.push_str(body);
     contents.push('\n');
@@ -424,6 +436,12 @@ fn parse_ticket_file(path: &Path) -> Result<Ticket, String> {
             .and_then(|value| value.parse().ok())
             .unwrap_or(now),
         file_path: path.to_string_lossy().to_string(),
+        priority: frontmatter
+            .get("priority")
+            .and_then(|value| clean_enum_value(value, PRIORITIES)),
+        size: frontmatter
+            .get("size")
+            .and_then(|value| clean_enum_value(value, SIZES)),
         pr_link: frontmatter_value(&frontmatter, &["pr_link", "pr_url", "pull_request"]),
         assignee: frontmatter_value(&frontmatter, &["assignee", "codex_thread", "codex_link"]),
     })
@@ -447,6 +465,16 @@ fn clean_metadata_value(value: &str) -> Option<String> {
         None
     } else {
         Some(cleaned)
+    }
+}
+
+fn clean_enum_value(value: &str, allowed: &[&str]) -> Option<String> {
+    let cleaned = clean_metadata_value(value)?.to_uppercase();
+
+    if allowed.contains(&cleaned.as_str()) {
+        Some(cleaned)
+    } else {
+        None
     }
 }
 

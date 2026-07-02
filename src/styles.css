@@ -687,6 +687,60 @@ select:focus {
   color: #1f5860;
 }
 
+.ticket-task-metadata {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 9px;
+}
+
+.task-chip {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 22px;
+  align-items: center;
+  overflow: hidden;
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-size: 0.7rem;
+  font-weight: 820;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-chip-priority,
+.task-selector-mark-priority {
+  background: #eef0e8;
+  color: #48483f;
+}
+
+.task-priority-p0 {
+  background: #ffe0df;
+  color: #873333;
+}
+
+.task-priority-p1 {
+  background: #f8e6c8;
+  color: #744810;
+}
+
+.task-priority-p2 {
+  background: #e2ebff;
+  color: #27457e;
+}
+
+.task-priority-p3 {
+  background: #dcefe6;
+  color: #174b3e;
+}
+
+.task-priority-p4 {
+  background: #e9e1ff;
+  color: #57418d;
+}
+
 .ticket-metadata {
   display: flex;
   min-width: 0;
@@ -1025,6 +1079,55 @@ select:focus {
   box-shadow: none;
 }
 
+.ticket-timestamps {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.editor-metadata-controls {
+  display: flex;
+  max-width: min(760px, 100%);
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: end;
+  margin-top: 12px;
+}
+
+.editor-metadata-field {
+  display: grid;
+  gap: 5px;
+}
+
+.editor-metadata-field > span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 780;
+  line-height: 1.1;
+}
+
+.editor-selector-field {
+  flex: 0 0 auto;
+}
+
+.editor-priority-field {
+  width: 92px;
+}
+
+.editor-size-field {
+  width: 92px;
+}
+
+.editor-selector-field .status-selector {
+  width: 100%;
+}
+
 .editor-actions {
   display: flex;
   gap: 8px;
@@ -1035,6 +1138,14 @@ select:focus {
   position: relative;
   width: 146px;
   flex: 0 0 auto;
+}
+
+.task-selector-priority {
+  width: 92px;
+}
+
+.task-selector-size {
+  width: 92px;
 }
 
 .status-selector-button {
@@ -1074,6 +1185,10 @@ select:focus {
   font-weight: 800;
 }
 
+.status-current.is-chip-only {
+  grid-template-columns: max-content;
+}
+
 .status-current span:last-child,
 .status-option span:nth-child(2) {
   overflow: hidden;
@@ -1090,6 +1205,52 @@ select:focus {
   border-radius: 7px;
   background: rgba(35, 108, 90, 0.1);
   color: var(--accent);
+}
+
+.task-selector-mark-priority,
+.task-selector-mark-size {
+  width: auto;
+  min-width: 24px;
+  padding: 0 7px;
+  font-size: 0.68rem;
+  font-weight: 880;
+  letter-spacing: 0;
+}
+
+.task-chip-size,
+.task-selector-mark-size {
+  background: #f7f2e8;
+  color: #5d594f;
+}
+
+.task-selector-mark-priority.task-priority-p0 {
+  background: #ffe0df;
+  color: #873333;
+}
+
+.task-selector-mark-priority.task-priority-p1 {
+  background: #f8e6c8;
+  color: #744810;
+}
+
+.task-selector-mark-priority.task-priority-p2 {
+  background: #e2ebff;
+  color: #27457e;
+}
+
+.task-selector-mark-priority.task-priority-p3 {
+  background: #dcefe6;
+  color: #174b3e;
+}
+
+.task-selector-mark-priority.task-priority-p4 {
+  background: #e9e1ff;
+  color: #57418d;
+}
+
+.task-selector-mark-none {
+  background: #eeeae2;
+  color: #676155;
 }
 
 .status-icon-doing {
@@ -1117,6 +1278,13 @@ select:focus {
 
 .status-selector.is-open .status-chevron {
   transform: rotate(180deg);
+}
+
+.editor-metadata-controls .status-menu {
+  right: auto;
+  left: 0;
+  width: 126px;
+  min-width: 126px;
 }
 
 .status-menu {
@@ -1153,7 +1321,7 @@ select:focus {
   display: grid;
   min-width: 0;
   min-height: 38px;
-  grid-template-columns: 24px minmax(0, 1fr) 18px;
+  grid-template-columns: max-content minmax(0, 1fr) 18px;
   gap: 9px;
   align-items: center;
   border: 0;
@@ -1162,6 +1330,14 @@ select:focus {
   color: var(--ink);
   padding: 0 8px;
   text-align: left;
+}
+
+.status-option .status-option-icon {
+  grid-column: 1;
+}
+
+.status-option span:nth-child(2) {
+  grid-column: 2;
 }
 
 .status-option:hover,
@@ -1178,6 +1354,8 @@ select:focus {
   display: grid;
   width: 18px;
   height: 18px;
+  grid-column: 3;
+  justify-self: end;
   place-items: center;
   color: var(--accent);
 }
@@ -1475,6 +1653,11 @@ select:focus {
 
   .editor-actions {
     flex-wrap: wrap;
+  }
+
+  .editor-selector-field {
+    flex: 1 1 140px;
+    width: auto;
   }
 
   .status-selector {

@@ -71,7 +71,7 @@ fn agent_metadata_is_read_and_preserved_when_tickets_are_written() {
     let ticket_path = dir.join("agent-ticket.md");
     fs::write(
         &ticket_path,
-        "---\nid: agent-ticket\ntitle: Agent task\nstatus: doing\norder: 1000\ncreated_at: 10\nupdated_at: 20\npr_link: https://github.com/zbsss/todo.md/pull/22\nbranch: codex/ai-agent-metadata\nworkspace: /tmp/todo-md-workspace\nassignee: codex://threads/019f239d-dd6d-7451-856c-3847cadaf912\n---\n\nBody",
+        "---\nid: agent-ticket\ntitle: Agent task\nstatus: doing\norder: 1000\ncreated_at: 10\nupdated_at: 20\npr_link: https://github.com/zbsss/todo.md/pull/22\nbranch: codex/ai-agent-metadata\nworkspace: /tmp/todo-md-workspace\nassignee: codex://threads/019f239d-dd6d-7451-856c-3847cadaf912\npriority: p1\nsize: m\ntags: ui, metadata, UI\n---\n\nBody",
     )
     .expect("write ticket with agent metadata");
 
@@ -85,6 +85,8 @@ fn agent_metadata_is_read_and_preserved_when_tickets_are_written() {
         ticket.assignee.as_deref(),
         Some("codex://threads/019f239d-dd6d-7451-856c-3847cadaf912")
     );
+    assert_eq!(ticket.priority.as_deref(), Some("P1"));
+    assert_eq!(ticket.size.as_deref(), Some("M"));
 
     let updated = write_ticket(
         &dir,
@@ -102,6 +104,9 @@ fn agent_metadata_is_read_and_preserved_when_tickets_are_written() {
     assert!(!contents.contains("\nbranch:"));
     assert!(!contents.contains("\nworkspace:"));
     assert!(contents.contains("\nassignee: codex://threads/019f239d-dd6d-7451-856c-3847cadaf912\n"));
+    assert!(contents.contains("\npriority: P1\n"));
+    assert!(contents.contains("\nsize: M\n"));
+    assert!(!contents.contains("\ntags:"));
     assert!(contents.ends_with("\n\nUpdated body\n"));
 
     fs::remove_dir_all(dir).expect("cleanup");
@@ -168,6 +173,8 @@ fn write_ticket_cleans_titles_and_uses_untitled_fallback() {
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
+            priority: None,
+            size: None,
             pr_link: None,
             assignee: None,
         },
@@ -189,6 +196,8 @@ fn write_ticket_cleans_titles_and_uses_untitled_fallback() {
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
+            priority: None,
+            size: None,
             pr_link: None,
             assignee: None,
         },
@@ -218,6 +227,8 @@ fn applying_ticket_positions_only_rewrites_changed_tickets() {
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
+            priority: None,
+            size: None,
             pr_link: None,
             assignee: None,
         },
@@ -234,6 +245,8 @@ fn applying_ticket_positions_only_rewrites_changed_tickets() {
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
+            priority: None,
+            size: None,
             pr_link: None,
             assignee: None,
         },
@@ -349,6 +362,8 @@ fn tasks_directory_is_used_for_ticket_storage_when_present() {
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
+            priority: None,
+            size: None,
             pr_link: None,
             assignee: None,
         },
@@ -384,6 +399,8 @@ fn preexisting_empty_tasks_directory_remains_ticket_storage() {
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
+            priority: None,
+            size: None,
             pr_link: None,
             assignee: None,
         },
@@ -429,6 +446,8 @@ fn unrelated_nonempty_tasks_directory_does_not_replace_root_ticket_storage() {
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
+            priority: None,
+            size: None,
             pr_link: None,
             assignee: None,
         },
@@ -457,6 +476,8 @@ fn pasted_ticket_images_are_stored_under_tasks_images() {
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
+            priority: None,
+            size: None,
             pr_link: None,
             assignee: None,
         },
@@ -500,6 +521,8 @@ fn pasted_ticket_images_accept_mime_parameters() {
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
+            priority: None,
+            size: None,
             pr_link: None,
             assignee: None,
         },
@@ -612,6 +635,8 @@ fn pasted_ticket_images_can_be_deleted_by_markdown_path() {
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
+            priority: None,
+            size: None,
             pr_link: None,
             assignee: None,
         },
