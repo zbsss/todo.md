@@ -532,7 +532,7 @@ function renderTicketCard(ticket: Ticket) {
       aria-keyshortcuts="Enter ArrowUp ArrowDown"
     >
       <div class="ticket-topline">
-        <h4>${escapeHtml(ticket.title)}</h4>
+        <h4>${renderTicketTitle(ticket.title)}</h4>
         <span class="drag-handle" title="Drag to reorder">${icon("grip-vertical")}</span>
       </div>
       ${renderedBody ? `<div class="markdown card-markdown">${renderedBody}</div>` : ""}
@@ -2365,6 +2365,80 @@ function focusStatusOption(selector: HTMLElement, offset: -1 | 1) {
   const nextIndex = (startIndex + offset + options.length) % options.length;
 
   options[nextIndex]?.focus();
+}
+
+type TaggedTicketTitle = {
+  tag: string;
+  text: string;
+};
+
+function renderTicketTitle(title: string) {
+  const taggedTitle = parseTicketTitle(title);
+
+  if (!taggedTitle) {
+    return escapeHtml(title);
+  }
+
+  const tagVariant = ticketTitleTagVariant(taggedTitle.tag);
+  const titleText = taggedTitle.text
+    ? `<span class="ticket-title-text">${escapeHtml(taggedTitle.text)}</span>`
+    : "";
+
+  return `
+    <span class="ticket-title">
+      <span class="ticket-title-chip ticket-title-chip-${tagVariant}">${escapeHtml(taggedTitle.tag)}</span>
+      ${titleText}
+    </span>
+  `;
+}
+
+function parseTicketTitle(title: string): TaggedTicketTitle | null {
+  const trimmed = title.trim();
+  const bracketTag = /^\[([^\]\r\n]{1,32})\](?:\s+(.*)|$)/.exec(trimmed);
+
+  if (bracketTag) {
+    const tag = normalizeTicketTitleTag(bracketTag[1]);
+
+    if (!tag) {
+      return null;
+    }
+
+    return {
+      tag,
+      text: bracketTag[2]?.trim() ?? ""
+    };
+  }
+
+  const colonTag = /^([A-Za-z][A-Za-z0-9 _/-]{0,31}):\s+(.+)$/.exec(trimmed);
+
+  if (!colonTag) {
+    return null;
+  }
+
+  const tag = normalizeTicketTitleTag(colonTag[1]);
+
+  if (!tag) {
+    return null;
+  }
+
+  return {
+    tag,
+    text: colonTag[2].trim()
+  };
+}
+
+function normalizeTicketTitleTag(tag: string) {
+  return tag.split(/\s+/).filter(Boolean).join(" ");
+}
+
+function ticketTitleTagVariant(tag: string) {
+  let hash = 0;
+
+  for (const character of tag.toLowerCase()) {
+    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  }
+
+  return hash % 6;
 }
 
 function mountMarkdownEditor(parent: HTMLElement, value: string) {
