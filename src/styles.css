@@ -589,11 +589,11 @@ select:focus {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fffdf9;
-  box-shadow: 0 8px 24px rgba(52, 45, 35, 0.08);
+  box-shadow: 0 5px 16px rgba(52, 45, 35, 0.06);
   cursor: grab;
   padding: 12px;
   transition:
-    transform 120ms ease,
+    background 120ms ease,
     box-shadow 120ms ease,
     border-color 120ms ease,
     opacity 120ms ease;
@@ -601,10 +601,12 @@ select:focus {
 
 .ticket-card:hover,
 .ticket-card:focus {
-  border-color: var(--line-strong);
-  box-shadow: 0 12px 30px rgba(52, 45, 35, 0.12);
+  border-color: rgba(35, 108, 90, 0.42);
+  background: #fffefa;
+  box-shadow:
+    0 7px 18px rgba(52, 45, 35, 0.07),
+    0 0 0 2px rgba(35, 108, 90, 0.07);
   outline: none;
-  transform: translateY(-1px);
 }
 
 .ticket-card.is-dragging {
