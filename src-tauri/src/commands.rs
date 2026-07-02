@@ -2,7 +2,7 @@ use std::{fs, path::Path};
 use tauri::AppHandle;
 
 use crate::{
-    explorer::open_path_in_file_explorer,
+    explorer::{open_external_url, open_path_in_file_explorer},
     images::{
         allow_project_image_assets, delete_ticket_image_from_project, save_ticket_image_to_project,
     },
@@ -187,6 +187,11 @@ pub(crate) fn open_project_folder(app: AppHandle, project_id: String) -> Result<
 }
 
 #[tauri::command]
+pub(crate) fn open_external_link(url: String) -> Result<(), String> {
+    open_external_url(&url)
+}
+
+#[tauri::command]
 pub(crate) fn list_tickets(app: AppHandle, project_id: String) -> Result<Vec<Ticket>, String> {
     let project_dir = project_dir(&app, &project_id)?;
     allow_project_image_assets(&app, &project_dir)?;
@@ -216,8 +221,6 @@ pub(crate) fn create_ticket(
         updated_at: now,
         file_path: String::new(),
         pr_link: None,
-        branch: None,
-        workspace: None,
         assignee: None,
     };
 

@@ -55,10 +55,6 @@ pub(crate) struct Ticket {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) pr_link: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) branch: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) workspace: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) assignee: Option<String>,
 }
 

@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     constants::{LEGACY_PROJECT_META_DIR, PROJECT_META_DIR, TASKS_DIR},
-    explorer::file_explorer_command,
+    explorer::{file_explorer_command, validate_external_url},
     images::{
         delete_ticket_image_from_project, image_file_name_from_markdown_path,
         save_ticket_image_to_project,
@@ -81,8 +81,6 @@ fn agent_metadata_is_read_and_preserved_when_tickets_are_written() {
         ticket.pr_link.as_deref(),
         Some("https://github.com/zbsss/todo.md/pull/22")
     );
-    assert_eq!(ticket.branch.as_deref(), Some("codex/ai-agent-metadata"));
-    assert_eq!(ticket.workspace.as_deref(), Some("/tmp/todo-md-workspace"));
     assert_eq!(
         ticket.assignee.as_deref(),
         Some("codex://threads/019f239d-dd6d-7451-856c-3847cadaf912")
@@ -101,8 +99,8 @@ fn agent_metadata_is_read_and_preserved_when_tickets_are_written() {
     assert!(contents.contains("\nrank: "));
     assert!(!contents.contains("\norder: "));
     assert!(contents.contains("\npr_link: https://github.com/zbsss/todo.md/pull/22\n"));
-    assert!(contents.contains("\nbranch: codex/ai-agent-metadata\n"));
-    assert!(contents.contains("\nworkspace: /tmp/todo-md-workspace\n"));
+    assert!(!contents.contains("\nbranch:"));
+    assert!(!contents.contains("\nworkspace:"));
     assert!(contents.contains("\nassignee: codex://threads/019f239d-dd6d-7451-856c-3847cadaf912\n"));
     assert!(contents.ends_with("\n\nUpdated body\n"));
 
@@ -171,8 +169,6 @@ fn write_ticket_cleans_titles_and_uses_untitled_fallback() {
             updated_at: 1,
             file_path: String::new(),
             pr_link: None,
-            branch: None,
-            workspace: None,
             assignee: None,
         },
     )
@@ -194,8 +190,6 @@ fn write_ticket_cleans_titles_and_uses_untitled_fallback() {
             updated_at: 1,
             file_path: String::new(),
             pr_link: None,
-            branch: None,
-            workspace: None,
             assignee: None,
         },
     )
@@ -225,8 +219,6 @@ fn applying_ticket_positions_only_rewrites_changed_tickets() {
             updated_at: 1,
             file_path: String::new(),
             pr_link: None,
-            branch: None,
-            workspace: None,
             assignee: None,
         },
     )
@@ -243,8 +235,6 @@ fn applying_ticket_positions_only_rewrites_changed_tickets() {
             updated_at: 1,
             file_path: String::new(),
             pr_link: None,
-            branch: None,
-            workspace: None,
             assignee: None,
         },
     )
@@ -360,8 +350,6 @@ fn tasks_directory_is_used_for_ticket_storage_when_present() {
             updated_at: 1,
             file_path: String::new(),
             pr_link: None,
-            branch: None,
-            workspace: None,
             assignee: None,
         },
     )
@@ -397,8 +385,6 @@ fn preexisting_empty_tasks_directory_remains_ticket_storage() {
             updated_at: 1,
             file_path: String::new(),
             pr_link: None,
-            branch: None,
-            workspace: None,
             assignee: None,
         },
     )
@@ -444,8 +430,6 @@ fn unrelated_nonempty_tasks_directory_does_not_replace_root_ticket_storage() {
             updated_at: 1,
             file_path: String::new(),
             pr_link: None,
-            branch: None,
-            workspace: None,
             assignee: None,
         },
     )
@@ -474,8 +458,6 @@ fn pasted_ticket_images_are_stored_under_tasks_images() {
             updated_at: 1,
             file_path: String::new(),
             pr_link: None,
-            branch: None,
-            workspace: None,
             assignee: None,
         },
     )
@@ -519,8 +501,6 @@ fn pasted_ticket_images_accept_mime_parameters() {
             updated_at: 1,
             file_path: String::new(),
             pr_link: None,
-            branch: None,
-            workspace: None,
             assignee: None,
         },
     )
@@ -633,8 +613,6 @@ fn pasted_ticket_images_can_be_deleted_by_markdown_path() {
             updated_at: 1,
             file_path: String::new(),
             pr_link: None,
-            branch: None,
-            workspace: None,
             assignee: None,
         },
     )
@@ -769,6 +747,33 @@ fn file_explorer_command_targets_project_folder() {
     assert_eq!(args, vec![dir.to_string_lossy().to_string()]);
 
     fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[test]
+fn external_links_allow_pr_and_codex_protocols_only() {
+    for url in [
+        "https://github.com/zbsss/todo.md/pull/23",
+        "http://github.com/zbsss/todo.md/pull/23",
+        "codex://threads/019f239d-dd6d-7451-856c-3847cadaf912",
+    ] {
+        assert_eq!(
+            validate_external_url(url),
+            Ok(()),
+            "{url} should be allowed"
+        );
+    }
+
+    for url in [
+        "file:///Users/example",
+        "javascript:alert(1)",
+        "https://github.com/\n",
+        "codex:",
+    ] {
+        assert!(
+            validate_external_url(url).is_err(),
+            "{url} should be rejected"
+        );
+    }
 }
 
 #[test]

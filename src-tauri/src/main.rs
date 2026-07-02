@@ -22,6 +22,7 @@ fn main() {
             commands::remove_project,
             commands::reorder_projects,
             commands::open_project_folder,
+            commands::open_external_link,
             commands::list_tickets,
             commands::create_ticket,
             commands::update_ticket,

@@ -690,13 +690,14 @@ select:focus {
 .ticket-metadata {
   display: flex;
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px;
   margin-top: 9px;
 }
 
 .ticket-metadata-item {
   display: inline-grid;
+  flex: 0 1 auto;
   max-width: 100%;
   min-width: 0;
   min-height: 24px;
@@ -712,6 +713,10 @@ select:focus {
   line-height: 1.1;
   padding: 2px 7px;
   text-decoration: none;
+}
+
+.ticket-metadata-item:last-child {
+  flex-shrink: 1;
 }
 
 .ticket-metadata-item.is-link {

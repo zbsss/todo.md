@@ -536,7 +536,6 @@ function renderTicketMetadataItem(item: TicketMetadataItem) {
       <a
         class="ticket-metadata-item is-link"
         href="${escapeAttr(item.href)}"
-        target="_blank"
         rel="noreferrer"
         title="${escapeAttr(item.title)}"
       >${contents}</a>
@@ -549,8 +548,6 @@ function renderTicketMetadataItem(item: TicketMetadataItem) {
 function ticketMetadataItems(ticket: Ticket): TicketMetadataItem[] {
   const items: TicketMetadataItem[] = [];
   const prLink = metadataValue(ticket.prLink);
-  const branch = metadataValue(ticket.branch);
-  const workspace = metadataValue(ticket.workspace);
   const assignee = metadataValue(ticket.assignee);
 
   if (prLink) {
@@ -559,22 +556,6 @@ function ticketMetadataItems(ticket: Ticket): TicketMetadataItem[] {
       text: formatPullRequestLabel(prLink),
       title: `Pull request: ${prLink}`,
       href: safeMetadataHref(prLink, ["https:", "http:"])
-    });
-  }
-
-  if (branch) {
-    items.push({
-      label: "Branch",
-      text: branch,
-      title: `Branch: ${branch}`
-    });
-  }
-
-  if (workspace) {
-    items.push({
-      label: "Workspace",
-      text: shortPath(workspace),
-      title: `Workspace: ${workspace}`
     });
   }
 
@@ -618,7 +599,7 @@ function formatAssigneeLabel(value: string) {
   const codexThread = value.match(/^codex:\/\/threads\/([^/?#]+)/i);
 
   if (codexThread) {
-    return `Thread ${codexThread[1].slice(0, 8)}`;
+    return codexThread[1].slice(0, 8);
   }
 
   return shortLinkLabel(value);
@@ -743,6 +724,7 @@ function renderStatusSelector(status: Status) {
 function bindEvents() {
   bindProjectEvents();
   bindTicketEvents();
+  bindMetadataEvents();
   bindEditorEvents();
 }
 
@@ -1246,6 +1228,24 @@ async function saveProjectOrder(projects: ProjectSummary[]) {
     render();
   } catch (error) {
     state.workspace = previousWorkspace;
+    showError(error);
+  }
+}
+
+function bindMetadataEvents() {
+  document.querySelectorAll<HTMLAnchorElement>("a.ticket-metadata-item[href]").forEach((link) => {
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void openMetadataLink(link.href);
+    });
+  });
+}
+
+async function openMetadataLink(url: string) {
+  try {
+    await api.openExternalLink(url);
+  } catch (error) {
     showError(error);
   }
 }

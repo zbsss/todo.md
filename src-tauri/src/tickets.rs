@@ -92,14 +92,6 @@ pub(crate) fn write_ticket(project_dir: &Path, mut ticket: Ticket) -> Result<Tic
         .pr_link
         .take()
         .and_then(|value| clean_metadata_value(&value));
-    ticket.branch = ticket
-        .branch
-        .take()
-        .and_then(|value| clean_metadata_value(&value));
-    ticket.workspace = ticket
-        .workspace
-        .take()
-        .and_then(|value| clean_metadata_value(&value));
     ticket.assignee = ticket
         .assignee
         .take()
@@ -112,8 +104,6 @@ pub(crate) fn write_ticket(project_dir: &Path, mut ticket: Ticket) -> Result<Tic
         ticket.id, ticket.title, ticket.status, ticket.rank, ticket.created_at, ticket.updated_at
     );
     append_optional_frontmatter(&mut contents, "pr_link", ticket.pr_link.as_deref());
-    append_optional_frontmatter(&mut contents, "branch", ticket.branch.as_deref());
-    append_optional_frontmatter(&mut contents, "workspace", ticket.workspace.as_deref());
     append_optional_frontmatter(&mut contents, "assignee", ticket.assignee.as_deref());
     contents.push_str("---\n\n");
     contents.push_str(body);
@@ -435,8 +425,6 @@ fn parse_ticket_file(path: &Path) -> Result<Ticket, String> {
             .unwrap_or(now),
         file_path: path.to_string_lossy().to_string(),
         pr_link: frontmatter_value(&frontmatter, &["pr_link", "pr_url", "pull_request"]),
-        branch: frontmatter_value(&frontmatter, &["branch"]),
-        workspace: frontmatter_value(&frontmatter, &["workspace"]),
         assignee: frontmatter_value(&frontmatter, &["assignee", "codex_thread", "codex_link"]),
     })
 }
