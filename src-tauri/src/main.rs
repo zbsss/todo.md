@@ -9,6 +9,8 @@ use std::{
 use tauri::{AppHandle, Manager};
 
 const STATUSES: [&str; 3] = ["todo", "doing", "done"];
+const PRIORITIES: [&str; 5] = ["P0", "P1", "P2", "P3", "P4"];
+const SIZES: [&str; 5] = ["XS", "S", "M", "L", "XL"];
 const TASKS_DIR: &str = ".tasks";
 const TASKS_STORAGE_MARKER: &str = ".todo-md-storage";
 const MAX_IMAGE_BYTES: usize = 25 * 1024 * 1024;
@@ -64,6 +66,9 @@ struct Ticket {
     body: String,
     status: String,
     order: i64,
+    priority: String,
+    size: String,
+    tags: Vec<String>,
     created_at: u128,
     updated_at: u128,
     file_path: String,
@@ -83,6 +88,17 @@ struct TicketPosition {
     id: String,
     status: String,
     order: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TicketUpdate {
+    title: String,
+    body: String,
+    status: String,
+    priority: String,
+    size: String,
+    tags: Vec<String>,
 }
 
 #[tauri::command]
@@ -267,6 +283,9 @@ fn create_ticket(
         body: String::new(),
         status,
         order,
+        priority: String::new(),
+        size: String::new(),
+        tags: Vec::new(),
         created_at: now,
         updated_at: now,
         file_path: String::new(),
@@ -280,17 +299,21 @@ fn update_ticket(
     app: AppHandle,
     project_id: String,
     ticket_id: String,
-    title: String,
-    body: String,
-    status: String,
+    update: TicketUpdate,
 ) -> Result<Ticket, String> {
-    validate_status(&status)?;
+    validate_status(&update.status)?;
+    let priority = normalize_priority(&update.priority)?;
+    let size = normalize_size(&update.size)?;
+    let tags = normalize_tags(update.tags);
     let project_dir = project_dir(&app, &project_id)?;
     let mut ticket = read_ticket(&project_dir, &ticket_id)?;
 
-    ticket.title = clean_title(&title);
-    ticket.body = normalize_newlines(&body).trim_end().to_string();
-    ticket.status = status;
+    ticket.title = clean_title(&update.title);
+    ticket.body = normalize_newlines(&update.body).trim_end().to_string();
+    ticket.status = update.status;
+    ticket.priority = priority;
+    ticket.size = size;
+    ticket.tags = tags;
     ticket.updated_at = now_millis();
 
     write_ticket(&project_dir, ticket)
@@ -509,6 +532,9 @@ fn seed_project(project_dir: &Path) -> Result<(), String> {
             body: body.to_string(),
             status: status.to_string(),
             order,
+            priority: String::new(),
+            size: String::new(),
+            tags: Vec::new(),
             created_at: now,
             updated_at: now,
             file_path: String::new(),
@@ -845,6 +871,18 @@ fn parse_ticket_file(path: &Path) -> Result<Ticket, String> {
             .get("order")
             .and_then(|value| value.parse().ok())
             .unwrap_or(0),
+        priority: frontmatter
+            .get("priority")
+            .and_then(|value| normalize_priority(value).ok())
+            .unwrap_or_default(),
+        size: frontmatter
+            .get("size")
+            .and_then(|value| normalize_size(value).ok())
+            .unwrap_or_default(),
+        tags: frontmatter
+            .get("tags")
+            .map(|value| parse_tags(value))
+            .unwrap_or_default(),
         created_at: frontmatter
             .get("created_at")
             .and_then(|value| value.parse().ok())
@@ -861,6 +899,9 @@ fn write_ticket(project_dir: &Path, mut ticket: Ticket) -> Result<Ticket, String
     let tasks_dir = ticket_storage_dir(project_dir);
     fs::create_dir_all(&tasks_dir).map_err(|err| err.to_string())?;
     ticket.title = clean_title(&ticket.title);
+    ticket.priority = normalize_priority(&ticket.priority)?;
+    ticket.size = normalize_size(&ticket.size)?;
+    ticket.tags = normalize_tags(ticket.tags);
 
     if ticket.title.is_empty() {
         ticket.title = "Untitled ticket".to_string();
@@ -872,12 +913,16 @@ fn write_ticket(project_dir: &Path, mut ticket: Ticket) -> Result<Ticket, String
 
     let path = ticket_write_path(&tasks_dir, &ticket)?;
     let body = ticket.body.trim_end();
+    let tags = ticket.tags.join(", ");
     let contents = format!(
-        "---\nid: {}\ntitle: {}\nstatus: {}\norder: {}\ncreated_at: {}\nupdated_at: {}\n---\n\n{}\n",
+        "---\nid: {}\ntitle: {}\nstatus: {}\norder: {}\npriority: {}\nsize: {}\ntags: {}\ncreated_at: {}\nupdated_at: {}\n---\n\n{}\n",
         ticket.id,
         ticket.title,
         ticket.status,
         ticket.order,
+        ticket.priority,
+        ticket.size,
+        tags,
         ticket.created_at,
         ticket.updated_at,
         body
@@ -1310,6 +1355,58 @@ fn validate_status(status: &str) -> Result<(), String> {
     }
 }
 
+fn normalize_priority(priority: &str) -> Result<String, String> {
+    let priority = priority.trim().to_ascii_uppercase();
+
+    if priority.is_empty() || PRIORITIES.contains(&priority.as_str()) {
+        Ok(priority)
+    } else {
+        Err("Invalid ticket priority.".into())
+    }
+}
+
+fn normalize_size(size: &str) -> Result<String, String> {
+    let size = size.trim().to_ascii_uppercase();
+
+    if size.is_empty() || SIZES.contains(&size.as_str()) {
+        Ok(size)
+    } else {
+        Err("Invalid ticket size.".into())
+    }
+}
+
+fn parse_tags(value: &str) -> Vec<String> {
+    normalize_tags(value.split(',').map(str::to_string).collect())
+}
+
+fn normalize_tags(tags: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut normalized = Vec::new();
+
+    for tag in tags {
+        let tag = clean_tag(&tag);
+
+        if tag.is_empty() {
+            continue;
+        }
+
+        let key = tag.to_ascii_lowercase();
+
+        if seen.insert(key) {
+            normalized.push(tag);
+        }
+    }
+
+    normalized
+}
+
+fn clean_tag(tag: &str) -> String {
+    tag.replace([',', '\r', '\n'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
 fn status_rank(status: &str) -> usize {
     STATUSES
         .iter()
@@ -1442,6 +1539,9 @@ mod tests {
                 body: "Stored away from the imported folder root.".to_string(),
                 status: "todo".to_string(),
                 order: 1000,
+                priority: String::new(),
+                size: String::new(),
+                tags: Vec::new(),
                 created_at: 1,
                 updated_at: 1,
                 file_path: String::new(),
@@ -1475,6 +1575,9 @@ mod tests {
                 body: "Body".to_string(),
                 status: "todo".to_string(),
                 order: 1000,
+                priority: String::new(),
+                size: String::new(),
+                tags: Vec::new(),
                 created_at: 1,
                 updated_at: 1,
                 file_path: String::new(),
@@ -1491,6 +1594,48 @@ mod tests {
     }
 
     #[test]
+    fn ticket_metadata_round_trips_through_frontmatter() {
+        let dir = temp_project_dir("ticket-metadata");
+        let ticket = write_ticket(
+            &dir,
+            Ticket {
+                id: "planned-work".to_string(),
+                title: "Planned work".to_string(),
+                body: "Body".to_string(),
+                status: "todo".to_string(),
+                order: 1000,
+                priority: "p1".to_string(),
+                size: "m".to_string(),
+                tags: vec![
+                    "frontend".to_string(),
+                    "release notes".to_string(),
+                    "frontend".to_string(),
+                ],
+                created_at: 1,
+                updated_at: 2,
+                file_path: String::new(),
+            },
+        )
+        .expect("write ticket");
+
+        assert_eq!(ticket.priority, "P1");
+        assert_eq!(ticket.size, "M");
+        assert_eq!(ticket.tags, vec!["frontend", "release-notes"]);
+
+        let contents = fs::read_to_string(dir.join("planned-work.md")).expect("read ticket");
+        assert!(contents.contains("priority: P1"));
+        assert!(contents.contains("size: M"));
+        assert!(contents.contains("tags: frontend, release-notes"));
+
+        let parsed = read_ticket(&dir, "planned-work").expect("read ticket");
+        assert_eq!(parsed.priority, "P1");
+        assert_eq!(parsed.size, "M");
+        assert_eq!(parsed.tags, vec!["frontend", "release-notes"]);
+
+        fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
     fn pasted_ticket_images_are_stored_under_tasks_images() {
         let dir = temp_project_dir("ticket-image");
         let tasks_dir = ensure_tasks_dir(&dir).expect("create tasks dir");
@@ -1502,6 +1647,9 @@ mod tests {
                 body: "Body".to_string(),
                 status: "todo".to_string(),
                 order: 1000,
+                priority: String::new(),
+                size: String::new(),
+                tags: Vec::new(),
                 created_at: 1,
                 updated_at: 1,
                 file_path: String::new(),
@@ -1597,6 +1745,9 @@ mod tests {
                 body: "Body".to_string(),
                 status: "todo".to_string(),
                 order: 1000,
+                priority: String::new(),
+                size: String::new(),
+                tags: Vec::new(),
                 created_at: 1,
                 updated_at: 1,
                 file_path: String::new(),
