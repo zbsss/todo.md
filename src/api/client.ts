@@ -29,7 +29,7 @@ export type TodoApi = {
   updateTicket(projectId: string, ticketId: string, title: string, body: string, status: Status): Promise<Ticket>;
   saveTicketImage(projectId: string, ticketId: string, mimeType: string, bytes: number[]): Promise<SavedTicketImage>;
   deleteTicketImage(projectId: string, markdownPath: string): Promise<void>;
-  reorderTickets(projectId: string, positions: Array<{ id: string; status: Status; order: number }>): Promise<Ticket[]>;
+  reorderTickets(projectId: string, positions: Array<{ id: string; status: Status; rank: string }>): Promise<Ticket[]>;
   deleteTicket(projectId: string, ticketId: string): Promise<void>;
   persistDraftSync(options: PersistDraftSyncOptions): Ticket | null;
 };
@@ -125,7 +125,7 @@ export function createApi({ isTauriRuntime, mockStore = createMockStore() }: Cre
 
       return mockStore.deleteTicketImage(projectId, markdownPath);
     },
-    async reorderTickets(projectId: string, positions: Array<{ id: string; status: Status; order: number }>) {
+    async reorderTickets(projectId: string, positions: Array<{ id: string; status: Status; rank: string }>) {
       if (isTauriRuntime) {
         return invoke<Ticket[]>("reorder_tickets", { projectId, positions });
       }

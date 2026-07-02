@@ -22,8 +22,8 @@ use crate::{
     },
     text::{clean_title, normalize_newlines, now_millis, safe_segment, title_from_slug},
     tickets::{
-        list_tickets_from_disk, next_order, read_ticket, unique_ticket_id, validate_status,
-        write_ticket,
+        apply_ticket_positions, list_tickets_from_disk, next_rank, read_ticket, unique_ticket_id,
+        validate_status, write_ticket,
     },
 };
 
@@ -204,14 +204,14 @@ pub(crate) fn create_ticket(
     let project_dir = project_dir(&app, &project_id)?;
     let ticket_id = unique_ticket_id(&project_dir, &title);
     let now = now_millis();
-    let order = next_order(&project_dir, &status)?;
+    let rank = next_rank(&project_dir, &status)?;
 
     let ticket = Ticket {
         id: ticket_id,
         title: clean_title(&title),
         body: String::new(),
         status,
-        order,
+        rank,
         created_at: now,
         updated_at: now,
         file_path: String::new(),
@@ -280,14 +280,7 @@ pub(crate) fn reorder_tickets(
 ) -> Result<Vec<Ticket>, String> {
     let project_dir = project_dir(&app, &project_id)?;
 
-    for position in positions {
-        validate_status(&position.status)?;
-        let mut ticket = read_ticket(&project_dir, &position.id)?;
-        ticket.status = position.status;
-        ticket.order = position.order;
-        ticket.updated_at = now_millis();
-        write_ticket(&project_dir, ticket)?;
-    }
+    apply_ticket_positions(&project_dir, positions)?;
 
     list_tickets_from_disk(&project_dir)
 }

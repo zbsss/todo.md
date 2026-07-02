@@ -9,7 +9,7 @@ use crate::{
     models::{ProjectDiskMeta, ProjectRecord, ProjectRegistry, ProjectSummary, Ticket},
     paths::{canonical_project_path, same_path_string, unique_child_dir},
     text::{clean_title, now_millis, safe_segment, slugify, title_from_slug},
-    tickets::{count_markdown_files, unique_ticket_id, write_ticket},
+    tickets::{count_markdown_files, rank_between, unique_ticket_id, write_ticket},
 };
 
 pub(crate) fn migrate_default_projects(
@@ -94,29 +94,29 @@ pub(crate) fn seed_project(project_dir: &Path) -> Result<(), String> {
             "Capture app ideas",
             "Use Markdown for notes, links, and quick checklists.\n\n- Keep tickets portable\n- Make project folders easy to inspect",
             "todo",
-            1000,
+            rank_between(None, None)?,
         ),
         (
             "Sketch board columns",
             "Columns are intentionally small for now:\n\n- To do\n- Doing\n- Done",
             "doing",
-            1000,
+            rank_between(None, None)?,
         ),
         (
             "Keep tickets local",
             "Every card is backed by a plain `.md` file on disk.",
             "done",
-            1000,
+            rank_between(None, None)?,
         ),
     ];
 
-    for (title, body, status, order) in seeds {
+    for (title, body, status, rank) in seeds {
         let ticket = Ticket {
             id: unique_ticket_id(project_dir, title),
             title: title.to_string(),
             body: body.to_string(),
             status: status.to_string(),
-            order,
+            rank,
             created_at: now,
             updated_at: now,
             file_path: String::new(),

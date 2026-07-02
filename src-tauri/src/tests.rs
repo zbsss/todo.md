@@ -10,7 +10,7 @@ use crate::{
         delete_ticket_image_from_project, image_file_name_from_markdown_path,
         save_ticket_image_to_project,
     },
-    models::{ProjectDiskMeta, ProjectRecord, ProjectRegistry, Ticket},
+    models::{ProjectDiskMeta, ProjectRecord, ProjectRegistry, Ticket, TicketPosition},
     paths::ensure_tasks_dir,
     projects::{
         forget_removed_project_path, is_removed_project_path, list_projects_from_registry,
@@ -19,8 +19,9 @@ use crate::{
     },
     text::now_millis,
     tickets::{
-        count_markdown_files, list_tickets_from_disk, read_ticket, split_frontmatter,
-        unique_ticket_id_from_base, write_ticket,
+        apply_ticket_positions, count_markdown_files, list_tickets_from_disk, rank_between,
+        rank_from_legacy_order, read_ticket, split_frontmatter, unique_ticket_id_from_base,
+        write_ticket,
     },
 };
 
@@ -75,6 +76,7 @@ fn agent_metadata_is_read_and_preserved_when_tickets_are_written() {
     .expect("write ticket with agent metadata");
 
     let ticket = read_ticket(&dir, "agent-ticket").expect("read ticket");
+    assert!(ticket.rank.starts_with(&rank_from_legacy_order(1000)));
     assert_eq!(
         ticket.pr_link.as_deref(),
         Some("https://github.com/zbsss/todo.md/pull/22")
@@ -96,11 +98,59 @@ fn agent_metadata_is_read_and_preserved_when_tickets_are_written() {
     .expect("write updated ticket");
     let contents = fs::read_to_string(&updated.file_path).expect("read updated ticket");
 
+    assert!(contents.contains("\nrank: "));
+    assert!(!contents.contains("\norder: "));
     assert!(contents.contains("\npr_link: https://github.com/zbsss/todo.md/pull/22\n"));
     assert!(contents.contains("\nbranch: codex/ai-agent-metadata\n"));
     assert!(contents.contains("\nworkspace: /tmp/todo-md-workspace\n"));
     assert!(contents.contains("\nassignee: codex://threads/019f239d-dd6d-7451-856c-3847cadaf912\n"));
     assert!(contents.ends_with("\n\nUpdated body\n"));
+
+    fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[test]
+fn legacy_duplicate_orders_get_distinct_in_memory_ranks() {
+    let dir = temp_project_dir("duplicate-order-ranks");
+    let no_order_path = dir.join("no-order.md");
+    let first_path = dir.join("first.md");
+    let second_path = dir.join("second.md");
+
+    fs::write(
+        &no_order_path,
+        "---\nid: no-order\ntitle: No order\nstatus: todo\ncreated_at: 1\nupdated_at: 1\n---\n\nNo order",
+    )
+    .expect("write no-order legacy ticket");
+    fs::write(
+        &first_path,
+        "---\nid: first\ntitle: A first\nstatus: todo\norder: 1000\ncreated_at: 1\nupdated_at: 1\n---\n\nFirst",
+    )
+    .expect("write first legacy ticket");
+    fs::write(
+        &second_path,
+        "---\nid: second\ntitle: B second\nstatus: todo\norder: 1000\ncreated_at: 1\nupdated_at: 1\n---\n\nSecond",
+    )
+    .expect("write second legacy ticket");
+
+    let tickets = list_tickets_from_disk(&dir).expect("list legacy tickets");
+    assert_eq!(
+        tickets
+            .iter()
+            .map(|ticket| ticket.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["no-order", "first", "second"]
+    );
+    assert!(tickets[0].rank < tickets[1].rank);
+    assert!(tickets[1].rank < tickets[2].rank);
+    assert!(!fs::read_to_string(no_order_path)
+        .expect("read no-order legacy ticket")
+        .contains("\nrank: "));
+    assert!(!fs::read_to_string(first_path)
+        .expect("read first legacy ticket")
+        .contains("\nrank: "));
+    assert!(!fs::read_to_string(second_path)
+        .expect("read second legacy ticket")
+        .contains("\nrank: "));
 
     fs::remove_dir_all(dir).expect("cleanup");
 }
@@ -116,7 +166,7 @@ fn write_ticket_cleans_titles_and_uses_untitled_fallback() {
             title: "  Plan\r\n   work\t now  ".to_string(),
             body: "Body\n\n".to_string(),
             status: "todo".to_string(),
-            order: 1000,
+            rank: rank_between(None, None).expect("initial rank"),
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
@@ -139,7 +189,7 @@ fn write_ticket_cleans_titles_and_uses_untitled_fallback() {
             title: " \n\t ".to_string(),
             body: String::new(),
             status: "todo".to_string(),
-            order: 2000,
+            rank: rank_between(None, None).expect("initial rank"),
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
@@ -154,6 +204,99 @@ fn write_ticket_cleans_titles_and_uses_untitled_fallback() {
     assert!(fs::read_to_string(&untitled.file_path)
         .expect("read untitled ticket")
         .contains("title: Untitled ticket\n"));
+
+    fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[test]
+fn applying_ticket_positions_only_rewrites_changed_tickets() {
+    let dir = temp_project_dir("rank-reorder");
+    let first_rank = rank_between(None, None).expect("first rank");
+    let second_rank = rank_between(Some(&first_rank), None).expect("second rank");
+    let first = write_ticket(
+        &dir,
+        Ticket {
+            id: "first".to_string(),
+            title: "First".to_string(),
+            body: "First body".to_string(),
+            status: "todo".to_string(),
+            rank: first_rank.clone(),
+            created_at: 1,
+            updated_at: 1,
+            file_path: String::new(),
+            pr_link: None,
+            branch: None,
+            workspace: None,
+            assignee: None,
+        },
+    )
+    .expect("write first ticket");
+    let second = write_ticket(
+        &dir,
+        Ticket {
+            id: "second".to_string(),
+            title: "Second".to_string(),
+            body: "Second body".to_string(),
+            status: "todo".to_string(),
+            rank: second_rank.clone(),
+            created_at: 1,
+            updated_at: 1,
+            file_path: String::new(),
+            pr_link: None,
+            branch: None,
+            workspace: None,
+            assignee: None,
+        },
+    )
+    .expect("write second ticket");
+
+    let first_before = fs::read_to_string(&first.file_path).expect("read first ticket");
+    let second_before = fs::read_to_string(&second.file_path).expect("read second ticket");
+    apply_ticket_positions(
+        &dir,
+        vec![
+            TicketPosition {
+                id: "first".to_string(),
+                status: "todo".to_string(),
+                rank: first_rank.clone(),
+            },
+            TicketPosition {
+                id: "second".to_string(),
+                status: "todo".to_string(),
+                rank: second_rank.clone(),
+            },
+        ],
+    )
+    .expect("apply no-op positions");
+
+    assert_eq!(
+        fs::read_to_string(&first.file_path).expect("read first ticket"),
+        first_before
+    );
+    assert_eq!(
+        fs::read_to_string(&second.file_path).expect("read second ticket"),
+        second_before
+    );
+
+    let moved_rank = rank_between(Some(&first_rank), Some(&second_rank)).expect("moved rank");
+    apply_ticket_positions(
+        &dir,
+        vec![TicketPosition {
+            id: "second".to_string(),
+            status: "todo".to_string(),
+            rank: moved_rank.clone(),
+        }],
+    )
+    .expect("move second ticket");
+
+    assert_eq!(
+        fs::read_to_string(&first.file_path).expect("read first ticket"),
+        first_before
+    );
+    let second_after = fs::read_to_string(&second.file_path).expect("read second ticket");
+    assert_ne!(second_after, second_before);
+    assert!(second_after.contains(&format!("\nrank: {moved_rank}\n")));
+    assert!(!second_after.contains("\norder: "));
 
     fs::remove_dir_all(dir).expect("cleanup");
 }
@@ -212,7 +355,7 @@ fn tasks_directory_is_used_for_ticket_storage_when_present() {
             title: "Planned work".to_string(),
             body: "Stored away from the imported folder root.".to_string(),
             status: "todo".to_string(),
-            order: 1000,
+            rank: rank_between(None, None).expect("initial rank"),
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
@@ -249,7 +392,7 @@ fn preexisting_empty_tasks_directory_remains_ticket_storage() {
             title: "First ticket".to_string(),
             body: "Body".to_string(),
             status: "todo".to_string(),
-            order: 1000,
+            rank: rank_between(None, None).expect("initial rank"),
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
@@ -296,7 +439,7 @@ fn unrelated_nonempty_tasks_directory_does_not_replace_root_ticket_storage() {
             title: "New root ticket".to_string(),
             body: "Body".to_string(),
             status: "todo".to_string(),
-            order: 2000,
+            rank: rank_between(None, None).expect("initial rank"),
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
@@ -326,7 +469,7 @@ fn pasted_ticket_images_are_stored_under_tasks_images() {
             title: "Planned work".to_string(),
             body: "Body".to_string(),
             status: "todo".to_string(),
-            order: 1000,
+            rank: rank_between(None, None).expect("initial rank"),
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
@@ -371,7 +514,7 @@ fn pasted_ticket_images_accept_mime_parameters() {
             title: "Planned work".to_string(),
             body: "Body".to_string(),
             status: "todo".to_string(),
-            order: 1000,
+            rank: rank_between(None, None).expect("initial rank"),
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
@@ -485,7 +628,7 @@ fn pasted_ticket_images_can_be_deleted_by_markdown_path() {
             title: "Planned work".to_string(),
             body: "Body".to_string(),
             status: "todo".to_string(),
-            order: 1000,
+            rank: rank_between(None, None).expect("initial rank"),
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
