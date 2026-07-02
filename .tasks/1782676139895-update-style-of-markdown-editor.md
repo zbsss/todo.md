@@ -4,7 +4,7 @@ title: Improve style of markdown editor
 status: doing
 order: 1000
 created_at: 1782676139895
-updated_at: 1782684817664
+updated_at: 1782954245216
 ---
 
 The background of the text editor is white and stands out. I'm also not a fan of the font, it's too skinny, pick something nicer and more fun.

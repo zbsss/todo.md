@@ -2,9 +2,9 @@
 id: 1782679531186-ideas-better-support-for-ai-agents
 title: Idea: Better support for AI Agents
 status: todo
-order: 9000
+order: 10000
 created_at: 1782679531186
-updated_at: 1782684817659
+updated_at: 1782954245208
 ---
 
 Add more metadata like:

@@ -4,7 +4,7 @@ title: Add ability to paste images into task descriptions
 status: done
 order: 4000
 created_at: 1782672569669
-updated_at: 1782684817668
+updated_at: 1782954245220
 ---
 
 I want to be able to Cmd+V a image into the task description. The image should be displayed.

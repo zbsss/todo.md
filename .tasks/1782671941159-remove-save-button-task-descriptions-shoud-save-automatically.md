@@ -4,7 +4,7 @@ title: Remove “Save” button. Task descriptions shoud save automatically
 status: done
 order: 1000
 created_at: 1782671941159
-updated_at: 1782684817665
+updated_at: 1782954245218
 ---
 
 

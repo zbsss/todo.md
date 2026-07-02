@@ -4,7 +4,7 @@ title: Add more task metadata
 status: todo
 order: 4000
 created_at: 1782672258806
-updated_at: 1782684817653
+updated_at: 1782954318050
 ---
 
 - creation time
@@ -13,6 +13,6 @@ updated_at: 1782684817653
 - size: T-shirt size
 - tags
 
-Priority and tags should be editable, they should also show up in Task card on the board view. Priority and tags should take precendency over the task description summary. Meaning if priority and tags take up too much space, don't show description preview. Tags should show up ass small chips.
+Priority and tags should be editable on the Task edit view. They should also show up in Task card on the board view. Priority and tags should take precendence over the task description summary on the Task card. Meaning if priority and tags take up too much space, don't show description preview. Tags should show up ass small chips.
 
-Creation time and last update only show up when you open a task, below the title
+Creation time and last update only show up when you open a task, below the title, but are not editable.
