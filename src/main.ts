@@ -532,7 +532,7 @@ function renderTicketCard(ticket: Ticket) {
       aria-keyshortcuts="Enter ArrowUp ArrowDown"
     >
       <div class="ticket-topline">
-        <h4>${escapeHtml(ticket.title)}</h4>
+        <h4>${renderTicketTitle(ticket.title)}</h4>
         <span class="drag-handle" title="Drag to reorder">${icon("grip-vertical")}</span>
       </div>
       ${renderedBody ? `<div class="markdown card-markdown">${renderedBody}</div>` : ""}
@@ -551,13 +551,30 @@ function renderEditor() {
     return "";
   }
 
+  const displayTitle = titleDisplayValue(state.draft.title);
+
   return `
     <div class="modal-backdrop" data-action="close-editor">
-      <section class="editor-panel" role="dialog" aria-modal="true" aria-labelledby="editor-title" tabindex="-1">
+      <section class="editor-panel" role="dialog" aria-modal="true" aria-label="Ticket editor" tabindex="-1">
         <header class="editor-header">
           <div>
             <p class="eyebrow">Ticket</p>
-            <input id="editor-title" class="title-input" name="title" value="${escapeAttr(state.draft.title)}" />
+            <button
+              id="editor-title"
+              type="button"
+              class="title-display"
+              data-action="edit-title"
+              aria-label="Edit title: ${escapeAttr(displayTitle)}"
+            >
+              ${renderTicketTitle(displayTitle)}
+            </button>
+            <input
+              class="title-input"
+              name="title"
+              value="${escapeAttr(state.draft.title)}"
+              aria-label="Title"
+              hidden
+            />
           </div>
           <div class="editor-actions">
             ${renderStatusSelector(state.draft.status)}
@@ -1373,12 +1390,27 @@ function bindEditorEvents() {
     if (action === "delete-ticket") {
       void deleteSelectedTicket();
     }
+
+    if (action === "edit-title") {
+      showEditorTitleInput();
+    }
   });
 
   titleInput?.addEventListener("input", () => {
     if (state.draft) {
       state.draft.title = titleInput.value;
       scheduleDraftSave();
+    }
+  });
+
+  titleInput?.addEventListener("blur", () => {
+    showEditorTitleDisplay();
+  });
+
+  titleInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      showEditorTitleDisplay({ focus: true });
     }
   });
 
@@ -1393,6 +1425,44 @@ function bindEditorEvents() {
       closeStatusSelector(statusSelector);
     }
   });
+}
+
+function showEditorTitleInput() {
+  const titleDisplay = document.querySelector<HTMLButtonElement>(".title-display");
+  const titleInput = document.querySelector<HTMLInputElement>('.editor-panel input[name="title"]');
+
+  if (!titleDisplay || !titleInput) {
+    return;
+  }
+
+  titleDisplay.hidden = true;
+  titleInput.hidden = false;
+  titleInput.focus();
+  titleInput.select();
+}
+
+function showEditorTitleDisplay(options: { focus?: boolean } = {}) {
+  const titleDisplay = document.querySelector<HTMLButtonElement>(".title-display");
+  const titleInput = document.querySelector<HTMLInputElement>('.editor-panel input[name="title"]');
+
+  if (!titleDisplay || !titleInput || !state.draft) {
+    return;
+  }
+
+  const displayTitle = titleDisplayValue(state.draft.title);
+
+  titleDisplay.innerHTML = renderTicketTitle(displayTitle);
+  titleDisplay.setAttribute("aria-label", `Edit title: ${displayTitle}`);
+  titleInput.hidden = true;
+  titleDisplay.hidden = false;
+
+  if (options.focus) {
+    titleDisplay.focus();
+  }
+}
+
+function titleDisplayValue(title: string) {
+  return title.trim() ? title : untitledTicketTitle;
 }
 
 function bindGlobalKeys() {
@@ -1440,17 +1510,7 @@ function openEditor(ticketId: string) {
   };
   state.draftSaveError = null;
   render();
-  focusEditorPanel();
-}
-
-function focusEditorPanel() {
-  const panel = document.querySelector<HTMLElement>(".editor-panel");
-
-  if (!panel) {
-    return;
-  }
-
-  panel.focus({ preventScroll: true });
+  document.querySelector<HTMLButtonElement>(".title-display")?.focus();
 }
 
 function closeEditor() {
@@ -2365,6 +2425,75 @@ function focusStatusOption(selector: HTMLElement, offset: -1 | 1) {
   const nextIndex = (startIndex + offset + options.length) % options.length;
 
   options[nextIndex]?.focus();
+}
+
+type TaggedTicketTitle = {
+  tag: string;
+  text: string;
+};
+
+function renderTicketTitle(title: string) {
+  const taggedTitle = parseTicketTitle(title);
+
+  if (!taggedTitle) {
+    return escapeHtml(title);
+  }
+
+  const tagVariant = ticketTitleTagVariant(taggedTitle.tag);
+  const titleText = taggedTitle.text
+    ? `<span class="ticket-title-text">${escapeHtml(taggedTitle.text)}</span>`
+    : "";
+
+  return `<span class="ticket-title"><span class="ticket-title-chip ticket-title-chip-${tagVariant}">${escapeHtml(taggedTitle.tag)}</span>${titleText}</span>`;
+}
+
+function parseTicketTitle(title: string): TaggedTicketTitle | null {
+  const trimmed = title.trim();
+  const bracketTag = /^\[([^\]\r\n]{1,32})\](?:\s+(.*)|$)/.exec(trimmed);
+
+  if (bracketTag) {
+    const tag = normalizeTicketTitleTag(bracketTag[1]);
+
+    if (!tag) {
+      return null;
+    }
+
+    return {
+      tag,
+      text: bracketTag[2]?.trim() ?? ""
+    };
+  }
+
+  const colonTag = /^([A-Za-z][A-Za-z0-9 _/-]{0,31}):\s+(.+)$/.exec(trimmed);
+
+  if (!colonTag) {
+    return null;
+  }
+
+  const tag = normalizeTicketTitleTag(colonTag[1]);
+
+  if (!tag) {
+    return null;
+  }
+
+  return {
+    tag,
+    text: colonTag[2].trim()
+  };
+}
+
+function normalizeTicketTitleTag(tag: string) {
+  return tag.split(/\s+/).filter(Boolean).join(" ");
+}
+
+function ticketTitleTagVariant(tag: string) {
+  let hash = 0;
+
+  for (const character of tag.toLowerCase()) {
+    hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  }
+
+  return hash % 6;
 }
 
 function mountMarkdownEditor(parent: HTMLElement, value: string) {

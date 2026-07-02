@@ -622,9 +622,69 @@ select:focus {
 }
 
 .ticket-topline h4 {
+  min-width: 0;
   overflow-wrap: anywhere;
   font-size: 0.94rem;
   line-height: 1.28;
+}
+
+.ticket-title {
+  display: inline;
+  min-width: 0;
+}
+
+.ticket-title-text {
+  display: inline;
+  margin-left: 4px;
+  overflow-wrap: anywhere;
+}
+
+.ticket-title-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 20px;
+  overflow: hidden;
+  border-radius: 6px;
+  padding: 0 7px;
+  font-size: 0.68rem;
+  font-weight: 850;
+  letter-spacing: 0;
+  line-height: 1;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  vertical-align: 0.08em;
+  white-space: nowrap;
+}
+
+.ticket-title-chip-0 {
+  background: #dcefe6;
+  color: #174b3e;
+}
+
+.ticket-title-chip-1 {
+  background: #e2ebff;
+  color: #27457e;
+}
+
+.ticket-title-chip-2 {
+  background: #ffe0df;
+  color: #873333;
+}
+
+.ticket-title-chip-3 {
+  background: #f8e6c8;
+  color: #744810;
+}
+
+.ticket-title-chip-4 {
+  background: #e9e1ff;
+  color: #57418d;
+}
+
+.ticket-title-chip-5 {
+  background: #dff0f4;
+  color: #1f5860;
 }
 
 .drag-handle {
@@ -837,6 +897,44 @@ select:focus {
 
 .editor-header > div:first-child {
   min-width: 0;
+}
+
+.title-display {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin-top: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: text;
+  font-size: clamp(1.35rem, 2.2vw, 2rem);
+  font-weight: 800;
+  line-height: 1.12;
+  overflow-wrap: anywhere;
+  padding: 0;
+  text-align: left;
+}
+
+.title-display:focus {
+  outline: none;
+}
+
+.title-display:focus-visible {
+  border-radius: 6px;
+  box-shadow: 0 0 0 3px rgba(35, 108, 90, 0.14);
+}
+
+.title-display .ticket-title-chip {
+  min-height: 24px;
+  padding: 0 9px;
+  font-size: 0.78rem;
+  vertical-align: 0.5em;
+}
+
+.title-display[hidden],
+.title-input[hidden] {
+  display: none !important;
 }
 
 .title-input {
