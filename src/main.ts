@@ -24,6 +24,8 @@ import { confirm, open } from "@tauri-apps/plugin-dialog";
 import {
   ArrowDown,
   ArrowUp,
+  Check,
+  ChevronDown,
   CircleCheck,
   Copy,
   createIcons,
@@ -558,17 +560,7 @@ function renderEditor() {
             <input id="editor-title" class="title-input" name="title" value="${escapeAttr(state.draft.title)}" />
           </div>
           <div class="editor-actions">
-            <select class="status-select" name="status" aria-label="Status">
-              ${columns
-                .map(
-                  (column) => `
-                    <option value="${column.id}" ${column.id === state.draft?.status ? "selected" : ""}>
-                      ${column.label}
-                    </option>
-                  `
-                )
-                .join("")}
-            </select>
+            ${renderStatusSelector(state.draft.status)}
             <button class="icon-button danger" data-action="delete-ticket" aria-label="Delete ticket" title="Delete ticket">
               ${icon("trash-2")}
             </button>
@@ -591,6 +583,49 @@ function renderEditor() {
           </div>
         </footer>
       </section>
+    </div>
+  `;
+}
+
+function renderStatusSelector(status: Status) {
+  const selected = columnForStatus(status);
+
+  return `
+    <div class="status-selector" data-status-selector>
+      <button
+        type="button"
+        class="status-selector-button"
+        data-action="toggle-status-selector"
+        aria-haspopup="menu"
+        aria-expanded="false"
+        aria-label="Status: ${selected.label}. Change status"
+      >
+        <span class="status-current">
+          <span class="status-current-icon status-icon-${selected.id}" data-status-current-icon>${icon(selected.icon)}</span>
+          <span data-status-current-label>${selected.label}</span>
+        </span>
+        <span class="status-chevron">${icon("chevron-down")}</span>
+      </button>
+      <div class="status-menu" role="menu" aria-label="Change status">
+        ${columns
+          .map(
+            (column) => `
+              <button
+                type="button"
+                class="status-option ${column.id === status ? "selected" : ""}"
+                data-action="choose-status"
+                data-status-value="${column.id}"
+                role="menuitemradio"
+                aria-checked="${column.id === status ? "true" : "false"}"
+              >
+                <span class="status-option-icon status-icon-${column.id}">${icon(column.icon)}</span>
+                <span>${column.label}</span>
+                <span class="status-option-check">${column.id === status ? icon("check") : ""}</span>
+              </button>
+            `
+          )
+          .join("")}
+      </div>
     </div>
   `;
 }
@@ -1293,7 +1328,7 @@ function bindEditorEvents() {
   const panel = document.querySelector<HTMLElement>(".editor-panel");
   const titleInput = document.querySelector<HTMLInputElement>('.editor-panel input[name="title"]');
   const editorRoot = document.querySelector<HTMLElement>("[data-editor-root]");
-  const statusSelect = document.querySelector<HTMLSelectElement>('.editor-panel select[name="status"]');
+  const statusSelector = document.querySelector<HTMLElement>("[data-status-selector]");
 
   if (editorRoot && state.draft) {
     mountMarkdownEditor(editorRoot, state.draft.body);
@@ -1307,6 +1342,12 @@ function bindEditorEvents() {
 
   panel?.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
+    const clickedStatusSelector = target.closest<HTMLElement>("[data-status-selector]");
+
+    if (!clickedStatusSelector) {
+      closeStatusSelector(statusSelector);
+    }
+
     const actionButton = target.closest<HTMLButtonElement>("button[data-action]");
 
     if (!actionButton?.dataset.action) {
@@ -1314,6 +1355,16 @@ function bindEditorEvents() {
     }
 
     const action = actionButton.dataset.action;
+
+    if (action === "toggle-status-selector") {
+      toggleStatusSelector(actionButton.closest<HTMLElement>("[data-status-selector]"));
+      return;
+    }
+
+    if (action === "choose-status") {
+      chooseDraftStatus(actionButton.dataset.statusValue, actionButton);
+      return;
+    }
 
     if (action === "close-editor") {
       void requestCloseEditor();
@@ -1331,10 +1382,15 @@ function bindEditorEvents() {
     }
   });
 
-  statusSelect?.addEventListener("change", () => {
-    if (state.draft) {
-      state.draft.status = statusSelect.value as Status;
-      scheduleDraftSave();
+  statusSelector?.addEventListener("keydown", (event) => {
+    handleStatusSelectorKeydown(event, statusSelector);
+  });
+
+  statusSelector?.addEventListener("focusout", (event) => {
+    const nextTarget = event.relatedTarget as Node | null;
+
+    if (!nextTarget || !statusSelector.contains(nextTarget)) {
+      closeStatusSelector(statusSelector);
     }
   });
 }
@@ -1348,6 +1404,11 @@ function bindGlobalKeys() {
 
     if (event.key === "Escape" && (state.projectMenu || state.ticketMenu)) {
       closeContextMenus();
+      return;
+    }
+
+    if (event.key === "Escape" && closeStatusSelector()) {
+      event.preventDefault();
       return;
     }
 
@@ -2148,6 +2209,154 @@ function statusIndex(status: Status) {
   return columns.findIndex((column) => column.id === status);
 }
 
+function columnForStatus(status: Status) {
+  return columns.find((column) => column.id === status) ?? columns[0];
+}
+
+function isStatus(value: string | undefined): value is Status {
+  return columns.some((column) => column.id === value);
+}
+
+function toggleStatusSelector(selector: HTMLElement | null) {
+  if (!selector) {
+    return;
+  }
+
+  setStatusSelectorOpen(selector, !selector.classList.contains("is-open"));
+}
+
+function closeStatusSelector(selector?: HTMLElement | null) {
+  const target = selector ?? document.querySelector<HTMLElement>("[data-status-selector].is-open");
+
+  if (!target?.classList.contains("is-open")) {
+    return false;
+  }
+
+  setStatusSelectorOpen(target, false);
+  return true;
+}
+
+function setStatusSelectorOpen(selector: HTMLElement, isOpen: boolean) {
+  selector.classList.toggle("is-open", isOpen);
+  selector.querySelector<HTMLButtonElement>(".status-selector-button")?.setAttribute("aria-expanded", String(isOpen));
+
+  if (isOpen) {
+    focusSelectedStatusOption(selector);
+  }
+}
+
+function chooseDraftStatus(value: string | undefined, source: HTMLElement) {
+  if (!isStatus(value) || !state.draft) {
+    return;
+  }
+
+  if (state.draft.status !== value) {
+    state.draft.status = value;
+    scheduleDraftSave();
+  }
+
+  const selector = source.closest<HTMLElement>("[data-status-selector]");
+  updateStatusSelector(selector, value);
+  closeStatusSelector(selector);
+  selector?.querySelector<HTMLButtonElement>(".status-selector-button")?.focus();
+}
+
+function updateStatusSelector(selector: HTMLElement | null, status: Status) {
+  if (!selector) {
+    return;
+  }
+
+  const selected = columnForStatus(status);
+  const currentIcon = selector.querySelector<HTMLElement>("[data-status-current-icon]");
+  const currentLabel = selector.querySelector<HTMLElement>("[data-status-current-label]");
+  const trigger = selector.querySelector<HTMLButtonElement>(".status-selector-button");
+
+  trigger?.setAttribute("aria-label", `Status: ${selected.label}. Change status`);
+
+  if (currentIcon) {
+    currentIcon.className = `status-current-icon status-icon-${selected.id}`;
+    currentIcon.innerHTML = icon(selected.icon);
+  }
+
+  if (currentLabel) {
+    currentLabel.textContent = selected.label;
+  }
+
+  selector.querySelectorAll<HTMLButtonElement>(".status-option").forEach((option) => {
+    const isSelected = option.dataset.statusValue === status;
+    option.classList.toggle("selected", isSelected);
+    option.setAttribute("aria-checked", String(isSelected));
+
+    const check = option.querySelector<HTMLElement>(".status-option-check");
+
+    if (check) {
+      check.innerHTML = isSelected ? icon("check") : "";
+    }
+  });
+
+  hydrateIcons();
+}
+
+function handleStatusSelectorKeydown(event: KeyboardEvent, selector: HTMLElement) {
+  const options = Array.from(selector.querySelectorAll<HTMLButtonElement>(".status-option"));
+
+  if (!options.length) {
+    return;
+  }
+
+  if (event.key === "Escape" && selector.classList.contains("is-open")) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeStatusSelector(selector);
+    selector.querySelector<HTMLButtonElement>(".status-selector-button")?.focus();
+    return;
+  }
+
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (!selector.classList.contains("is-open")) {
+      setStatusSelectorOpen(selector, true);
+      return;
+    }
+
+    focusStatusOption(selector, event.key === "ArrowDown" ? 1 : -1);
+    return;
+  }
+
+  if (event.key === "Home" || event.key === "End") {
+    event.preventDefault();
+    event.stopPropagation();
+    setStatusSelectorOpen(selector, true);
+    options[event.key === "Home" ? 0 : options.length - 1]?.focus();
+    return;
+  }
+
+  if ((event.key === "Enter" || event.key === " ") && document.activeElement?.classList.contains("status-option")) {
+    event.preventDefault();
+    event.stopPropagation();
+    chooseDraftStatus((document.activeElement as HTMLElement).dataset.statusValue, document.activeElement as HTMLElement);
+  }
+}
+
+function focusSelectedStatusOption(selector: HTMLElement) {
+  (
+    selector.querySelector<HTMLButtonElement>(".status-option.selected") ??
+    selector.querySelector<HTMLButtonElement>(".status-option")
+  )?.focus();
+}
+
+function focusStatusOption(selector: HTMLElement, offset: -1 | 1) {
+  const options = Array.from(selector.querySelectorAll<HTMLButtonElement>(".status-option"));
+  const currentIndex = options.findIndex((option) => option === document.activeElement);
+  const selectedIndex = options.findIndex((option) => option.classList.contains("selected"));
+  const startIndex = currentIndex >= 0 ? currentIndex : Math.max(0, selectedIndex);
+  const nextIndex = (startIndex + offset + options.length) % options.length;
+
+  options[nextIndex]?.focus();
+}
+
 function mountMarkdownEditor(parent: HTMLElement, value: string) {
   destroyMarkdownEditor();
 
@@ -2867,6 +3076,8 @@ function hydrateIcons() {
     icons: {
       ArrowDown,
       ArrowUp,
+      Check,
+      ChevronDown,
       CircleCheck,
       Copy,
       Folder,
