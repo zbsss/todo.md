@@ -7,3 +7,8 @@ If you identify a bug and fix it, consider creating a regression test to catch i
 ## Tasks
 
 If you're given a task from `.tasks` folder to work on you MUST read task description fully and understand it before starting to work on it. If you have any questions, ask for clarification, don't make assumptions.
+
+Add metadata to the ticket frontmatter:
+- `assignee` - Codex thread deep links such as `codex://threads/<thread-id>`
+- `pr_link` - link to the pull request that implements the task
+

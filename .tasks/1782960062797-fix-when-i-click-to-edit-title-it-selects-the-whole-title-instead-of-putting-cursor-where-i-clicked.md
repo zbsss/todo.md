@@ -2,9 +2,9 @@
 id: 1782960062797-fix-when-i-click-to-edit-title-it-selects-the-whole-title-instead-of-putting-cursor-where-i-clicked
 title: Fix: When i click to edit title, it selects the whole title, instead of putting cursor where i clicked
 status: done
-order: 14000
+order: 15000
 created_at: 1782960062797
-updated_at: 1783015729925
+updated_at: 1783023580811
 ---
 
 

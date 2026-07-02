@@ -4,7 +4,7 @@ title: Add context menu (right click) for tasks on the board
 status: done
 order: 4000
 created_at: 1782672633080
-updated_at: 1783015729913
+updated_at: 1783023580796
 ---
 
 option to copy path of that task, delete

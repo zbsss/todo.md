@@ -4,7 +4,7 @@ title: Idea: Agent focused CLI
 status: todo
 order: 12000
 created_at: 1783015875115
-updated_at: 1783015946167
+updated_at: 1783023580786
 ---
 
 Minimal CLI that can be used by Agents to:

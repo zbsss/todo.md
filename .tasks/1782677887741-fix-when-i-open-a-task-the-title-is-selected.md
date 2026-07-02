@@ -2,9 +2,9 @@
 id: 1782677887741-fix-when-i-open-a-task-the-title-is-selected
 title: Fix: when i open a task, the title is selected/highlighted
 status: done
-order: 11000
+order: 12000
 created_at: 1782677887741
-updated_at: 1783015729922
+updated_at: 1783023580807
 ---
 
 Title should not be selected by default
