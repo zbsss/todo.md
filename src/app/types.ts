@@ -27,7 +27,6 @@ export type Ticket = {
   filePath: string;
   priority?: TaskPriority;
   size?: TaskSize;
-  tags?: string[];
   prLink?: string;
   assignee?: string;
 };
@@ -39,7 +38,6 @@ export type TicketDraft = {
   status: Status;
   priority?: TaskPriority;
   size?: TaskSize;
-  tags: string[];
   pastedImages: string[];
 };
 

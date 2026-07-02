@@ -36,8 +36,7 @@ export type TodoApi = {
     body: string,
     status: Status,
     priority: TaskPriority | null,
-    size: TaskSize | null,
-    tags: string[]
+    size: TaskSize | null
   ): Promise<Ticket>;
   saveTicketImage(projectId: string, ticketId: string, mimeType: string, bytes: number[]): Promise<SavedTicketImage>;
   deleteTicketImage(projectId: string, markdownPath: string): Promise<void>;
@@ -130,8 +129,7 @@ export function createApi({ isTauriRuntime, mockStore = createMockStore() }: Cre
       body: string,
       status: Status,
       priority: TaskPriority | null,
-      size: TaskSize | null,
-      tags: string[]
+      size: TaskSize | null
     ) {
       if (isTauriRuntime) {
         return invoke<Ticket>("update_ticket", {
@@ -142,13 +140,12 @@ export function createApi({ isTauriRuntime, mockStore = createMockStore() }: Cre
             body,
             status,
             priority,
-            size,
-            tags
+            size
           }
         });
       }
 
-      return mockStore.updateTicket(projectId, ticketId, title, body, status, priority, size, tags);
+      return mockStore.updateTicket(projectId, ticketId, title, body, status, priority, size);
     },
     async saveTicketImage(projectId: string, ticketId: string, mimeType: string, bytes: number[]) {
       if (isTauriRuntime) {

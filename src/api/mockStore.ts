@@ -48,8 +48,7 @@ export function createMockStore() {
             updatedAt: now,
             filePath: "~/todo.md/projects/inbox/capture-app-ideas.md",
             priority: "P2",
-            size: "M",
-            tags: ["ideas", "markdown"]
+            size: "M"
           },
           {
             id: "sketch-board-columns",
@@ -62,7 +61,6 @@ export function createMockStore() {
             filePath: "~/todo.md/projects/inbox/sketch-board-columns.md",
             priority: "P1",
             size: "S",
-            tags: ["ui"],
             prLink: "https://github.com/zbsss/todo.md/pull/22",
             assignee: "codex://threads/019f239d-dd6d-7451-856c-3847cadaf912"
           },
@@ -74,8 +72,7 @@ export function createMockStore() {
             rank: rankBetween(),
             createdAt: now,
             updatedAt: now,
-            filePath: "~/todo.md/projects/inbox/keep-tickets-local.md",
-            tags: ["storage"]
+            filePath: "~/todo.md/projects/inbox/keep-tickets-local.md"
           }
         ]
       }
@@ -203,8 +200,7 @@ export function createMockStore() {
         rank: nextRank(store.tickets[projectId] ?? [], status),
         createdAt: now,
         updatedAt: now,
-        filePath: `~/todo.md/projects/${projectId}/${id}.md`,
-        tags: []
+        filePath: `~/todo.md/projects/${projectId}/${id}.md`
       };
 
       store.tickets[projectId] = [...(store.tickets[projectId] ?? []), ticket];
@@ -222,8 +218,7 @@ export function createMockStore() {
       body: string,
       status: Status,
       priority: TaskPriority | null,
-      size: TaskSize | null,
-      tags: string[]
+      size: TaskSize | null
     ) {
       const store = read();
       let updated: Ticket | null = null;
@@ -240,7 +235,6 @@ export function createMockStore() {
           status,
           priority: priority ?? undefined,
           size: size ?? undefined,
-          tags: cleanTags(tags),
           updatedAt: Date.now()
         };
         return updated;
@@ -328,7 +322,6 @@ export function createMockStore() {
           status: draft.status,
           priority: draft.priority,
           size: draft.size,
-          tags: cleanTags(draft.tags),
           updatedAt: Date.now()
         };
         return updated;
@@ -358,38 +351,20 @@ function normalizeStore(store: MockStore) {
   store.tickets = Object.fromEntries(
     Object.entries(store.tickets).map(([projectId, tickets]) => [
       projectId,
-      tickets.map((ticket) => ({
-        ...ticket,
-        priority: isTaskPriority(ticket.priority) ? ticket.priority : undefined,
-        size: isTaskSize(ticket.size) ? ticket.size : undefined,
-        tags: cleanTags(ticket.tags ?? []),
-        rank:
-          ticket.rank ??
-          rankFromLegacyOrder((ticket as Ticket & { order?: number }).order ?? 0, ticket.title, ticket.filePath)
-      }))
+      tickets.map((ticket) => {
+        const { order, tags: _tags, ...ticketWithoutTags } = ticket as Ticket & { order?: number; tags?: unknown };
+
+        return {
+          ...ticketWithoutTags,
+          priority: isTaskPriority(ticket.priority) ? ticket.priority : undefined,
+          size: isTaskSize(ticket.size) ? ticket.size : undefined,
+          rank: ticket.rank ?? rankFromLegacyOrder(order ?? 0, ticket.title, ticket.filePath)
+        };
+      })
     ])
   );
 
   return store;
-}
-
-function cleanTags(value: unknown) {
-  const used = new Set<string>();
-  const tags = Array.isArray(value) ? value : typeof value === "string" ? value.split(",") : [];
-
-  return tags
-    .map((tag) => String(tag).trim().replace(/\s+/g, " "))
-    .filter((tag) => tag.length > 0)
-    .filter((tag) => {
-      const key = tag.toLowerCase();
-
-      if (used.has(key)) {
-        return false;
-      }
-
-      used.add(key);
-      return true;
-    });
 }
 
 function isTaskPriority(value: unknown): value is TaskPriority {

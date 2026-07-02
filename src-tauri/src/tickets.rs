@@ -106,7 +106,6 @@ pub(crate) fn write_ticket(project_dir: &Path, mut ticket: Ticket) -> Result<Tic
         .size
         .take()
         .and_then(|value| clean_enum_value(&value, SIZES));
-    ticket.tags = clean_tags(&ticket.tags);
 
     let path = ticket_write_path(&tasks_dir, &ticket)?;
     let body = ticket.body.trim_end();
@@ -118,7 +117,6 @@ pub(crate) fn write_ticket(project_dir: &Path, mut ticket: Ticket) -> Result<Tic
     append_optional_frontmatter(&mut contents, "assignee", ticket.assignee.as_deref());
     append_optional_frontmatter(&mut contents, "priority", ticket.priority.as_deref());
     append_optional_frontmatter(&mut contents, "size", ticket.size.as_deref());
-    append_tags_frontmatter(&mut contents, &ticket.tags);
     contents.push_str("---\n\n");
     contents.push_str(body);
     contents.push('\n');
@@ -444,10 +442,6 @@ fn parse_ticket_file(path: &Path) -> Result<Ticket, String> {
         size: frontmatter
             .get("size")
             .and_then(|value| clean_enum_value(value, SIZES)),
-        tags: frontmatter
-            .get("tags")
-            .map(|value| parse_tags(value))
-            .unwrap_or_default(),
         pr_link: frontmatter_value(&frontmatter, &["pr_link", "pr_url", "pull_request"]),
         assignee: frontmatter_value(&frontmatter, &["assignee", "codex_thread", "codex_link"]),
     })
@@ -484,47 +478,12 @@ fn clean_enum_value(value: &str, allowed: &[&str]) -> Option<String> {
     }
 }
 
-fn parse_tags(value: &str) -> Vec<String> {
-    clean_tags(
-        &value
-            .split(',')
-            .map(ToOwned::to_owned)
-            .collect::<Vec<String>>(),
-    )
-}
-
-fn clean_tags(tags: &[String]) -> Vec<String> {
-    let mut used = HashSet::new();
-    let mut cleaned_tags = Vec::new();
-
-    for tag in tags {
-        let Some(cleaned) = clean_metadata_value(tag) else {
-            continue;
-        };
-        let key = cleaned.to_lowercase();
-
-        if used.insert(key) {
-            cleaned_tags.push(cleaned);
-        }
-    }
-
-    cleaned_tags
-}
-
 fn append_optional_frontmatter(contents: &mut String, key: &str, value: Option<&str>) {
     let Some(value) = value else {
         return;
     };
 
     contents.push_str(&format!("{key}: {value}\n"));
-}
-
-fn append_tags_frontmatter(contents: &mut String, tags: &[String]) {
-    if tags.is_empty() {
-        return;
-    }
-
-    contents.push_str(&format!("tags: {}\n", tags.join(", ")));
 }
 
 fn ticket_write_path(tasks_dir: &Path, ticket: &Ticket) -> Result<PathBuf, String> {

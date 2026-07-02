@@ -741,12 +741,6 @@ select:focus {
   color: #57418d;
 }
 
-.task-chip-tag {
-  border: 1px solid rgba(35, 108, 90, 0.18);
-  background: #edf6f1;
-  color: var(--accent-strong);
-}
-
 .ticket-metadata {
   display: flex;
   min-width: 0;
@@ -1106,14 +1100,12 @@ select:focus {
   margin-top: 12px;
 }
 
-.editor-metadata-field,
-.tag-editor {
+.editor-metadata-field {
   display: grid;
   gap: 5px;
 }
 
-.editor-metadata-field > span,
-.tag-editor > span {
+.editor-metadata-field > span {
   color: var(--muted);
   font-size: 0.72rem;
   font-weight: 780;
@@ -1125,25 +1117,15 @@ select:focus {
 }
 
 .editor-priority-field {
-  width: 190px;
+  width: 92px;
 }
 
 .editor-size-field {
-  width: 150px;
+  width: 92px;
 }
 
 .editor-selector-field .status-selector {
   width: 100%;
-}
-
-.tag-editor {
-  width: min(320px, 100%);
-  min-width: 210px;
-}
-
-.tag-editor input {
-  height: 38px;
-  font-size: 0.88rem;
 }
 
 .editor-actions {
@@ -1159,11 +1141,11 @@ select:focus {
 }
 
 .task-selector-priority {
-  width: 190px;
+  width: 92px;
 }
 
 .task-selector-size {
-  width: 150px;
+  width: 92px;
 }
 
 .status-selector-button {
@@ -1204,7 +1186,7 @@ select:focus {
 }
 
 .status-current.is-chip-only {
-  grid-template-columns: 24px;
+  grid-template-columns: max-content;
 }
 
 .status-current span:last-child,
@@ -1227,14 +1209,48 @@ select:focus {
 
 .task-selector-mark-priority,
 .task-selector-mark-size {
+  width: auto;
+  min-width: 24px;
+  padding: 0 7px;
   font-size: 0.68rem;
   font-weight: 880;
   letter-spacing: 0;
 }
 
+.task-chip-size,
 .task-selector-mark-size {
   background: #f7f2e8;
   color: #5d594f;
+}
+
+.task-selector-mark-priority.task-priority-p0 {
+  background: #ffe0df;
+  color: #873333;
+}
+
+.task-selector-mark-priority.task-priority-p1 {
+  background: #f8e6c8;
+  color: #744810;
+}
+
+.task-selector-mark-priority.task-priority-p2 {
+  background: #e2ebff;
+  color: #27457e;
+}
+
+.task-selector-mark-priority.task-priority-p3 {
+  background: #dcefe6;
+  color: #174b3e;
+}
+
+.task-selector-mark-priority.task-priority-p4 {
+  background: #e9e1ff;
+  color: #57418d;
+}
+
+.task-selector-mark-none {
+  background: #eeeae2;
+  color: #676155;
 }
 
 .status-icon-doing {
@@ -1267,8 +1283,8 @@ select:focus {
 .editor-metadata-controls .status-menu {
   right: auto;
   left: 0;
-  width: 100%;
-  min-width: 100%;
+  width: 126px;
+  min-width: 126px;
 }
 
 .status-menu {
@@ -1305,7 +1321,7 @@ select:focus {
   display: grid;
   min-width: 0;
   min-height: 38px;
-  grid-template-columns: 24px minmax(0, 1fr) 18px;
+  grid-template-columns: max-content minmax(0, 1fr) 18px;
   gap: 9px;
   align-items: center;
   border: 0;
@@ -1642,10 +1658,6 @@ select:focus {
   .editor-selector-field {
     flex: 1 1 140px;
     width: auto;
-  }
-
-  .tag-editor {
-    width: 100%;
   }
 
   .status-selector {

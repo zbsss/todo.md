@@ -222,7 +222,6 @@ pub(crate) fn create_ticket(
         file_path: String::new(),
         priority: None,
         size: None,
-        tags: Vec::new(),
         pr_link: None,
         assignee: None,
     };
@@ -246,7 +245,6 @@ pub(crate) fn update_ticket(
     ticket.status = update.status;
     ticket.priority = update.priority;
     ticket.size = update.size;
-    ticket.tags = update.tags;
     ticket.updated_at = now_millis();
 
     write_ticket(&project_dir, ticket)

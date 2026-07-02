@@ -517,14 +517,13 @@ function renderTicketCard(ticket: Ticket) {
 
 function ticketCardAriaLabel(ticket: Ticket) {
   const parts = [ticket.title];
-  const tags = ticketTags(ticket);
 
   if (ticket.priority) {
     parts.push(`Priority ${ticket.priority}`);
   }
 
-  if (tags.length) {
-    parts.push(`Tags ${tags.join(", ")}`);
+  if (ticket.size) {
+    parts.push(`Size ${ticket.size}`);
   }
 
   return parts.join(". ");
@@ -558,21 +557,18 @@ function taskMetadataWraps(metadata: HTMLElement) {
 }
 
 function renderTicketTaskMetadata(ticket: Ticket) {
-  const tags = ticketTags(ticket);
   const chips = [
     ticket.priority
       ? `<span class="task-chip task-chip-priority task-priority-${ticket.priority.toLowerCase()}" title="Priority ${ticket.priority}">${escapeHtml(ticket.priority)}</span>`
       : "",
-    ...tags.map(
-      (tag) => `<span class="task-chip task-chip-tag" title="${escapeAttr(tag)}">${escapeHtml(tag)}</span>`
-    )
+    ticket.size ? `<span class="task-chip task-chip-size" title="Size ${ticket.size}">${escapeHtml(ticket.size)}</span>` : ""
   ].filter(Boolean);
 
   if (!chips.length) {
     return "";
   }
 
-  return `<div class="ticket-task-metadata" aria-label="Task priority and tags">${chips.join("")}</div>`;
+  return `<div class="ticket-task-metadata" aria-label="Task priority and size">${chips.join("")}</div>`;
 }
 
 type TicketMetadataItem = {
@@ -730,15 +726,6 @@ function renderEditor() {
                 <span>Size</span>
                 ${renderTaskSelector("size", state.draft.size)}
               </div>
-              <label class="tag-editor">
-                <span>Tags</span>
-                <input
-                  name="tags"
-                  value="${escapeAttr(formatTagsInput(state.draft.tags))}"
-                  autocomplete="off"
-                  aria-label="Tags"
-                />
-              </label>
             </div>
           </div>
           <div class="editor-actions">
@@ -793,7 +780,7 @@ type TaskSelectorOption = {
 function renderTaskSelector(kind: TaskSelectorKind, value: string | undefined) {
   const config = taskSelectorConfig(kind);
   const selected = selectedTaskSelectorOption(kind, value);
-  const isChipOnlyValue = isChipOnlyTaskSelectorValue(kind, selected);
+  const isCompactCurrentValue = isCompactTaskSelectorCurrentValue(kind);
   const currentLabel = taskSelectorCurrentLabel(kind, selected, config.placeholder);
 
   return `
@@ -806,9 +793,9 @@ function renderTaskSelector(kind: TaskSelectorKind, value: string | undefined) {
         aria-expanded="false"
         aria-label="${escapeAttr(`${config.label}: ${selected.label}. Change ${config.label.toLowerCase()}`)}"
       >
-        <span class="status-current ${isChipOnlyValue ? "is-chip-only" : ""}">
+        <span class="status-current ${isCompactCurrentValue ? "is-chip-only" : ""}">
           <span class="${escapeAttr(taskSelectorMarkClass(kind, selected.value))}" data-task-current-mark>${renderTaskSelectorMark(kind, selected)}</span>
-          <span data-task-current-label ${isChipOnlyValue ? "hidden" : ""}>${escapeHtml(currentLabel)}</span>
+          <span data-task-current-label ${isCompactCurrentValue ? "hidden" : ""}>${escapeHtml(currentLabel)}</span>
         </span>
         <span class="status-chevron">${icon("chevron-down")}</span>
       </button>
@@ -816,7 +803,7 @@ function renderTaskSelector(kind: TaskSelectorKind, value: string | undefined) {
         ${config.options
           .map((option) => {
             const isSelected = option.value === selected.value;
-            const isChipOnlyOption = isChipOnlyTaskSelectorValue(kind, option);
+            const isChipOnlyOption = isCompactTaskSelectorCurrentValue(kind);
 
             return `
               <button
@@ -878,12 +865,12 @@ function selectedTaskSelectorOption(kind: TaskSelectorKind, value: string | unde
   return selected ?? config.options[0];
 }
 
-function isChipOnlyTaskSelectorValue(kind: TaskSelectorKind, option: TaskSelectorOption) {
-  return kind !== "status" && Boolean(option.value);
+function isCompactTaskSelectorCurrentValue(kind: TaskSelectorKind) {
+  return kind !== "status";
 }
 
 function taskSelectorCurrentLabel(kind: TaskSelectorKind, option: TaskSelectorOption, placeholder: string) {
-  if (isChipOnlyTaskSelectorValue(kind, option)) {
+  if (isCompactTaskSelectorCurrentValue(kind)) {
     return "";
   }
 
@@ -896,11 +883,11 @@ function renderTaskSelectorMark(kind: TaskSelectorKind, option: TaskSelectorOpti
   }
 
   if (kind === "priority") {
-    return escapeHtml(option.value || "P");
+    return escapeHtml(option.value || "None");
   }
 
   if (kind === "size") {
-    return escapeHtml(option.value || "Sz");
+    return escapeHtml(option.value || "None");
   }
 
   return "";
@@ -915,6 +902,10 @@ function taskSelectorMarkClass(kind: TaskSelectorKind, value: string) {
 
   if (kind === "priority" && value) {
     classes.push(`task-priority-${value.toLowerCase()}`);
+  }
+
+  if (kind !== "status" && !value) {
+    classes.push("task-selector-mark-none");
   }
 
   return classes.join(" ");
@@ -1644,7 +1635,6 @@ function bindEditorEvents() {
   const backdrop = document.querySelector<HTMLElement>(".modal-backdrop");
   const panel = document.querySelector<HTMLElement>(".editor-panel");
   const titleInput = document.querySelector<HTMLInputElement>('.editor-panel input[name="title"]');
-  const tagsInput = document.querySelector<HTMLInputElement>('.editor-panel input[name="tags"]');
   const editorRoot = document.querySelector<HTMLElement>("[data-editor-root]");
   const taskSelectors = Array.from(document.querySelectorAll<HTMLElement>("[data-task-selector]"));
 
@@ -1729,13 +1719,6 @@ function bindEditorEvents() {
     if (event.key === "Enter") {
       event.preventDefault();
       showEditorTitleDisplay({ focus: true });
-    }
-  });
-
-  tagsInput?.addEventListener("input", () => {
-    if (state.draft) {
-      state.draft.tags = parseTagsInput(tagsInput.value);
-      scheduleDraftSave();
     }
   });
 
@@ -1950,7 +1933,6 @@ function openEditor(ticketId: string) {
     status: ticket.status,
     priority: ticket.priority,
     size: ticket.size,
-    tags: ticketTags(ticket),
     pastedImages: []
   };
   state.draftSaveError = null;
@@ -2001,7 +1983,6 @@ function hasUnsavedDraft() {
     ticket.status !== state.draft.status ||
     ticket.priority !== state.draft.priority ||
     ticket.size !== state.draft.size ||
-    !areStringArraysEqual(ticketTags(ticket), normalizeDraftTags(state.draft.tags)) ||
     state.draft.pastedImages.length > 0
   );
 }
@@ -2012,10 +1993,6 @@ function normalizeDraftTitle(title: string) {
 
 function normalizeDraftBody(body: string) {
   return body.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trimEnd();
-}
-
-function normalizeDraftTags(tags: string[]) {
-  return cleanTagList(tags);
 }
 
 function scheduleDraftSave(delayMs = draftAutosaveDelayMs) {
@@ -2097,12 +2074,11 @@ async function persistCurrentDraft() {
   const status = draft.status;
   const priority = normalizeDraftPriority(draft.priority) ?? null;
   const size = normalizeDraftSize(draft.size) ?? null;
-  const tags = normalizeDraftTags(draft.tags);
   const imagePaths = [...draft.pastedImages];
   const unusedImages = unusedDraftImages(draft);
   await cleanupTicketImages(projectId, unusedImages);
 
-  const updated = await api.updateTicket(projectId, ticketId, title, body, status, priority, size, tags);
+  const updated = await api.updateTicket(projectId, ticketId, title, body, status, priority, size);
 
   clearDraftSaveError();
   state.tickets = state.tickets.map((ticket) => (ticket.id === updated.id ? updated : ticket)).sort(sortTickets);
@@ -2732,46 +2708,6 @@ function normalizeDraftSize(value: string | undefined): TaskSize | undefined {
   return isTaskSize(normalized) ? normalized : undefined;
 }
 
-function ticketTags(ticket: Ticket) {
-  return cleanTagList(ticket.tags ?? []);
-}
-
-function parseTagsInput(value: string) {
-  return cleanTagList(value.split(","));
-}
-
-function formatTagsInput(tags: string[]) {
-  return cleanTagList(tags).join(", ");
-}
-
-function cleanTagList(tags: string[]) {
-  const used = new Set<string>();
-  const cleanedTags: string[] = [];
-
-  tags.forEach((tag) => {
-    const cleaned = tag.trim().replace(/\s+/g, " ");
-
-    if (!cleaned) {
-      return;
-    }
-
-    const key = cleaned.toLowerCase();
-
-    if (used.has(key)) {
-      return;
-    }
-
-    used.add(key);
-    cleanedTags.push(cleaned);
-  });
-
-  return cleanedTags;
-}
-
-function areStringArraysEqual(left: string[], right: string[]) {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-
 function formatTicketTimestamp(value: number) {
   const date = new Date(value);
 
@@ -2896,14 +2832,14 @@ function updateTaskSelector(selector: HTMLElement | null, kind: TaskSelectorKind
 
   const config = taskSelectorConfig(kind);
   const selected = selectedTaskSelectorOption(kind, value);
-  const isChipOnlyValue = isChipOnlyTaskSelectorValue(kind, selected);
+  const isCompactCurrentValue = isCompactTaskSelectorCurrentValue(kind);
   const current = selector.querySelector<HTMLElement>(".status-current");
   const currentMark = selector.querySelector<HTMLElement>("[data-task-current-mark]");
   const currentLabel = selector.querySelector<HTMLElement>("[data-task-current-label]");
   const trigger = selector.querySelector<HTMLButtonElement>(".status-selector-button");
 
   trigger?.setAttribute("aria-label", `${config.label}: ${selected.label}. Change ${config.label.toLowerCase()}`);
-  current?.classList.toggle("is-chip-only", isChipOnlyValue);
+  current?.classList.toggle("is-chip-only", isCompactCurrentValue);
 
   if (currentMark) {
     currentMark.className = taskSelectorMarkClass(kind, selected.value);
@@ -2911,7 +2847,7 @@ function updateTaskSelector(selector: HTMLElement | null, kind: TaskSelectorKind
   }
 
   if (currentLabel) {
-    currentLabel.hidden = isChipOnlyValue;
+    currentLabel.hidden = isCompactCurrentValue;
     currentLabel.textContent = taskSelectorCurrentLabel(kind, selected, config.placeholder);
   }
 

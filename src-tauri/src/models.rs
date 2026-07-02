@@ -56,8 +56,6 @@ pub(crate) struct Ticket {
     pub(crate) priority: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) size: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) pr_link: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -74,8 +72,6 @@ pub(crate) struct TicketUpdate {
     pub(crate) priority: Option<String>,
     #[serde(default)]
     pub(crate) size: Option<String>,
-    #[serde(default)]
-    pub(crate) tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
