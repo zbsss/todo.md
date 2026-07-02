@@ -579,9 +579,7 @@ function renderEditor() {
               class="title-display"
               data-action="edit-title"
               aria-label="Edit title: ${escapeAttr(displayTitle)}"
-            >
-              ${renderTicketTitle(displayTitle)}
-            </button>
+            >${renderTicketTitle(displayTitle)}</button>
             <input
               class="title-input"
               name="title"
@@ -1416,7 +1414,16 @@ function bindEditorEvents() {
     }
 
     if (action === "edit-title") {
-      showEditorTitleInput();
+      showEditorTitleInput(
+        event.detail > 0
+          ? {
+              click: {
+                clientX: event.clientX,
+                clientY: event.clientY
+              }
+            }
+          : { select: true }
+      );
     }
   });
 
@@ -1451,7 +1458,9 @@ function bindEditorEvents() {
   });
 }
 
-function showEditorTitleInput() {
+function showEditorTitleInput(
+  options: { click?: { clientX: number; clientY: number }; select?: boolean } = {}
+) {
   const titleDisplay = document.querySelector<HTMLButtonElement>(".title-display");
   const titleInput = document.querySelector<HTMLInputElement>('.editor-panel input[name="title"]');
 
@@ -1459,10 +1468,121 @@ function showEditorTitleInput() {
     return;
   }
 
+  const caretIndex = options.click
+    ? titleInputCaretIndexFromDisplayClick(titleDisplay, titleInput.value, options.click.clientX, options.click.clientY)
+    : null;
+
   titleDisplay.hidden = true;
   titleInput.hidden = false;
   titleInput.focus();
-  titleInput.select();
+
+  if (caretIndex !== null) {
+    titleInput.setSelectionRange(caretIndex, caretIndex);
+    return;
+  }
+
+  if (options.select) {
+    titleInput.select();
+    return;
+  }
+
+  const end = titleInput.value.length;
+  titleInput.setSelectionRange(end, end);
+}
+
+function titleInputCaretIndexFromDisplayClick(
+  titleDisplay: HTMLElement,
+  inputValue: string,
+  clientX: number,
+  clientY: number
+) {
+  const hit = caretHitFromPoint(clientX, clientY);
+
+  if (!hit || !titleDisplay.contains(hit.node)) {
+    return null;
+  }
+
+  const displayOffset = textOffsetWithin(titleDisplay, hit.node, hit.offset);
+
+  if (displayOffset === null) {
+    return null;
+  }
+
+  return mapTitleDisplayOffsetToInputOffset(inputValue, displayOffset);
+}
+
+function caretHitFromPoint(clientX: number, clientY: number) {
+  const caretDocument = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+    caretRangeFromPoint?: (x: number, y: number) => ReturnType<Document["createRange"]> | null;
+  };
+
+  const position = caretDocument.caretPositionFromPoint?.(clientX, clientY);
+
+  if (position) {
+    return {
+      node: position.offsetNode,
+      offset: position.offset
+    };
+  }
+
+  const range = caretDocument.caretRangeFromPoint?.(clientX, clientY);
+
+  if (!range) {
+    return null;
+  }
+
+  return {
+    node: range.startContainer,
+    offset: range.startOffset
+  };
+}
+
+function textOffsetWithin(container: HTMLElement, node: Node, offset: number) {
+  try {
+    const range = document.createRange();
+    range.setStart(container, 0);
+    range.setEnd(node, clampNodeOffset(node, offset));
+
+    return range.toString().length;
+  } catch {
+    return null;
+  }
+}
+
+function clampNodeOffset(node: Node, offset: number) {
+  const length = node.nodeType === Node.TEXT_NODE ? (node.textContent?.length ?? 0) : node.childNodes.length;
+
+  return clampNumber(offset, 0, length);
+}
+
+function mapTitleDisplayOffsetToInputOffset(inputValue: string, displayOffset: number) {
+  if (!inputValue) {
+    return 0;
+  }
+
+  const taggedTitle = parseTicketTitle(inputValue);
+
+  if (!taggedTitle) {
+    return clampNumber(displayOffset, 0, inputValue.length);
+  }
+
+  const tagStart = inputValue.indexOf(taggedTitle.tag);
+  const textStart = taggedTitle.text ? inputValue.lastIndexOf(taggedTitle.text) : -1;
+
+  if (tagStart < 0 || textStart < 0 || textStart <= tagStart) {
+    return clampNumber(displayOffset, 0, inputValue.length);
+  }
+
+  if (displayOffset <= taggedTitle.tag.length) {
+    return clampNumber(tagStart + displayOffset, 0, inputValue.length);
+  }
+
+  return clampNumber(textStart + displayOffset - taggedTitle.tag.length, 0, inputValue.length);
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
 }
 
 function showEditorTitleDisplay(options: { focus?: boolean } = {}) {
