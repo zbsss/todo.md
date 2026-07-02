@@ -215,6 +215,10 @@ pub(crate) fn create_ticket(
         created_at: now,
         updated_at: now,
         file_path: String::new(),
+        pr_link: None,
+        branch: None,
+        workspace: None,
+        assignee: None,
     };
 
     write_ticket(&project_dir, ticket)

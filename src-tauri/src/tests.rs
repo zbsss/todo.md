@@ -65,6 +65,47 @@ fn split_frontmatter_ignores_missing_or_misplaced_delimiters() {
 }
 
 #[test]
+fn agent_metadata_is_read_and_preserved_when_tickets_are_written() {
+    let dir = temp_project_dir("agent-metadata");
+    let ticket_path = dir.join("agent-ticket.md");
+    fs::write(
+        &ticket_path,
+        "---\nid: agent-ticket\ntitle: Agent task\nstatus: doing\norder: 1000\ncreated_at: 10\nupdated_at: 20\npr_link: https://github.com/zbsss/todo.md/pull/22\nbranch: codex/ai-agent-metadata\nworkspace: /tmp/todo-md-workspace\nassignee: codex://threads/019f239d-dd6d-7451-856c-3847cadaf912\n---\n\nBody",
+    )
+    .expect("write ticket with agent metadata");
+
+    let ticket = read_ticket(&dir, "agent-ticket").expect("read ticket");
+    assert_eq!(
+        ticket.pr_link.as_deref(),
+        Some("https://github.com/zbsss/todo.md/pull/22")
+    );
+    assert_eq!(ticket.branch.as_deref(), Some("codex/ai-agent-metadata"));
+    assert_eq!(ticket.workspace.as_deref(), Some("/tmp/todo-md-workspace"));
+    assert_eq!(
+        ticket.assignee.as_deref(),
+        Some("codex://threads/019f239d-dd6d-7451-856c-3847cadaf912")
+    );
+
+    let updated = write_ticket(
+        &dir,
+        Ticket {
+            body: "Updated body".to_string(),
+            ..ticket
+        },
+    )
+    .expect("write updated ticket");
+    let contents = fs::read_to_string(&updated.file_path).expect("read updated ticket");
+
+    assert!(contents.contains("\npr_link: https://github.com/zbsss/todo.md/pull/22\n"));
+    assert!(contents.contains("\nbranch: codex/ai-agent-metadata\n"));
+    assert!(contents.contains("\nworkspace: /tmp/todo-md-workspace\n"));
+    assert!(contents.contains("\nassignee: codex://threads/019f239d-dd6d-7451-856c-3847cadaf912\n"));
+    assert!(contents.ends_with("\n\nUpdated body\n"));
+
+    fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[test]
 fn write_ticket_cleans_titles_and_uses_untitled_fallback() {
     let dir = temp_project_dir("write-title-cleanup");
 
@@ -79,6 +120,10 @@ fn write_ticket_cleans_titles_and_uses_untitled_fallback() {
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
+            pr_link: None,
+            branch: None,
+            workspace: None,
+            assignee: None,
         },
     )
     .expect("write cleaned ticket");
@@ -98,6 +143,10 @@ fn write_ticket_cleans_titles_and_uses_untitled_fallback() {
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
+            pr_link: None,
+            branch: None,
+            workspace: None,
+            assignee: None,
         },
     )
     .expect("write untitled ticket");
@@ -167,6 +216,10 @@ fn tasks_directory_is_used_for_ticket_storage_when_present() {
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
+            pr_link: None,
+            branch: None,
+            workspace: None,
+            assignee: None,
         },
     )
     .expect("write ticket");
@@ -200,6 +253,10 @@ fn preexisting_empty_tasks_directory_remains_ticket_storage() {
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
+            pr_link: None,
+            branch: None,
+            workspace: None,
+            assignee: None,
         },
     )
     .expect("write ticket");
@@ -243,6 +300,10 @@ fn unrelated_nonempty_tasks_directory_does_not_replace_root_ticket_storage() {
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
+            pr_link: None,
+            branch: None,
+            workspace: None,
+            assignee: None,
         },
     )
     .expect("write root ticket");
@@ -269,6 +330,10 @@ fn pasted_ticket_images_are_stored_under_tasks_images() {
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
+            pr_link: None,
+            branch: None,
+            workspace: None,
+            assignee: None,
         },
     )
     .expect("write ticket");
@@ -310,6 +375,10 @@ fn pasted_ticket_images_accept_mime_parameters() {
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
+            pr_link: None,
+            branch: None,
+            workspace: None,
+            assignee: None,
         },
     )
     .expect("write ticket");
@@ -420,6 +489,10 @@ fn pasted_ticket_images_can_be_deleted_by_markdown_path() {
             created_at: 1,
             updated_at: 1,
             file_path: String::new(),
+            pr_link: None,
+            branch: None,
+            workspace: None,
+            assignee: None,
         },
     )
     .expect("write ticket");

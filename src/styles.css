@@ -687,6 +687,72 @@ select:focus {
   color: #1f5860;
 }
 
+.ticket-metadata {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.ticket-metadata-item {
+  display: inline-grid;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 24px;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 5px;
+  align-items: center;
+  border: 1px solid rgba(112, 110, 104, 0.18);
+  border-radius: 6px;
+  background: #f7f2e8;
+  color: var(--ink);
+  font-size: 0.72rem;
+  font-weight: 760;
+  line-height: 1.1;
+  padding: 2px 7px;
+  text-decoration: none;
+}
+
+.ticket-metadata-item.is-link {
+  border-color: rgba(35, 108, 90, 0.22);
+  background: #edf6f1;
+}
+
+.ticket-metadata-item.is-link:hover,
+.ticket-metadata-item.is-link:focus-visible {
+  border-color: rgba(35, 108, 90, 0.42);
+  background: #e2f1e9;
+  outline: none;
+}
+
+.ticket-metadata-label {
+  color: var(--muted);
+  font-weight: 780;
+}
+
+.ticket-metadata-text {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ticket-metadata-item.is-link .ticket-metadata-text {
+  color: var(--accent-strong);
+}
+
+.editor-header .ticket-metadata {
+  max-width: min(720px, 100%);
+  margin-top: 10px;
+}
+
+.editor-header .ticket-metadata-item {
+  min-height: 26px;
+  font-size: 0.78rem;
+}
+
 .drag-handle {
   display: grid;
   width: 18px;

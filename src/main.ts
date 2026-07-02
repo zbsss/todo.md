@@ -498,9 +498,140 @@ function renderTicketCard(ticket: Ticket) {
         <h4>${renderTicketTitle(ticket.title)}</h4>
         <span class="drag-handle" title="Drag to reorder">${icon("grip-vertical")}</span>
       </div>
+      ${renderTicketMetadata(ticket)}
       ${renderedBody ? `<div class="markdown card-markdown">${renderedBody}</div>` : ""}
     </article>
   `;
+}
+
+type TicketMetadataItem = {
+  label: string;
+  text: string;
+  title: string;
+  href?: string;
+};
+
+function renderTicketMetadata(ticket: Ticket) {
+  const items = ticketMetadataItems(ticket);
+
+  if (!items.length) {
+    return "";
+  }
+
+  return `
+    <div class="ticket-metadata" aria-label="Task metadata">
+      ${items.map(renderTicketMetadataItem).join("")}
+    </div>
+  `;
+}
+
+function renderTicketMetadataItem(item: TicketMetadataItem) {
+  const contents = `
+    <span class="ticket-metadata-label">${escapeHtml(item.label)}</span>
+    <span class="ticket-metadata-text">${escapeHtml(item.text)}</span>
+  `;
+
+  if (item.href) {
+    return `
+      <a
+        class="ticket-metadata-item is-link"
+        href="${escapeAttr(item.href)}"
+        target="_blank"
+        rel="noreferrer"
+        title="${escapeAttr(item.title)}"
+      >${contents}</a>
+    `;
+  }
+
+  return `<span class="ticket-metadata-item" title="${escapeAttr(item.title)}">${contents}</span>`;
+}
+
+function ticketMetadataItems(ticket: Ticket): TicketMetadataItem[] {
+  const items: TicketMetadataItem[] = [];
+  const prLink = metadataValue(ticket.prLink);
+  const branch = metadataValue(ticket.branch);
+  const workspace = metadataValue(ticket.workspace);
+  const assignee = metadataValue(ticket.assignee);
+
+  if (prLink) {
+    items.push({
+      label: "PR",
+      text: formatPullRequestLabel(prLink),
+      title: `Pull request: ${prLink}`,
+      href: safeMetadataHref(prLink, ["https:", "http:"])
+    });
+  }
+
+  if (branch) {
+    items.push({
+      label: "Branch",
+      text: branch,
+      title: `Branch: ${branch}`
+    });
+  }
+
+  if (workspace) {
+    items.push({
+      label: "Workspace",
+      text: shortPath(workspace),
+      title: `Workspace: ${workspace}`
+    });
+  }
+
+  if (assignee) {
+    items.push({
+      label: "Codex",
+      text: formatAssigneeLabel(assignee),
+      title: `Assignee: ${assignee}`,
+      href: safeMetadataHref(assignee, ["codex:", "https:", "http:"])
+    });
+  }
+
+  return items;
+}
+
+function metadataValue(value: string | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function safeMetadataHref(value: string, allowedProtocols: string[]) {
+  try {
+    const url = new URL(value);
+    return allowedProtocols.includes(url.protocol) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function formatPullRequestLabel(value: string) {
+  const pullRequest = value.match(/\/pull\/(\d+)(?:[/?#]|$)/i);
+
+  if (pullRequest) {
+    return `#${pullRequest[1]}`;
+  }
+
+  return shortLinkLabel(value);
+}
+
+function formatAssigneeLabel(value: string) {
+  const codexThread = value.match(/^codex:\/\/threads\/([^/?#]+)/i);
+
+  if (codexThread) {
+    return `Thread ${codexThread[1].slice(0, 8)}`;
+  }
+
+  return shortLinkLabel(value);
+}
+
+function shortLinkLabel(value: string) {
+  try {
+    const url = new URL(value);
+    const path = url.pathname.replace(/^\/+|\/+$/g, "");
+    return path ? `${url.hostname}/${path}` : url.hostname;
+  } catch {
+    return value;
+  }
 }
 
 function renderEditor() {
@@ -536,6 +667,7 @@ function renderEditor() {
               aria-label="Title"
               hidden
             />
+            ${renderTicketMetadata(ticket)}
           </div>
           <div class="editor-actions">
             ${renderStatusSelector(state.draft.status)}
@@ -1175,7 +1307,11 @@ function bindTicketEvents() {
   });
 
   document.querySelectorAll<HTMLElement>(".ticket-card").forEach((card) => {
-    card.addEventListener("click", () => {
+    card.addEventListener("click", (event) => {
+      if ((event.target as HTMLElement).closest("a.ticket-metadata-item")) {
+        return;
+      }
+
       const ticketId = card.dataset.ticketId;
 
       if (ticketId) {
@@ -1184,6 +1320,10 @@ function bindTicketEvents() {
     });
 
     card.addEventListener("contextmenu", (event) => {
+      if ((event.target as HTMLElement).closest("a.ticket-metadata-item")) {
+        return;
+      }
+
       event.preventDefault();
       const ticketId = card.dataset.ticketId;
 

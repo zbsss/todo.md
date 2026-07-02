@@ -53,7 +53,11 @@ export function createMockStore() {
             order: 1000,
             createdAt: now,
             updatedAt: now,
-            filePath: "~/todo.md/projects/inbox/sketch-board-columns.md"
+            filePath: "~/todo.md/projects/inbox/sketch-board-columns.md",
+            prLink: "https://github.com/zbsss/todo.md/pull/22",
+            branch: "codex/board-polish",
+            workspace: "~/todo.md/worktrees/board-polish",
+            assignee: "codex://threads/019f239d-dd6d-7451-856c-3847cadaf912"
           },
           {
             id: "keep-tickets-local",

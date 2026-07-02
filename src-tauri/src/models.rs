@@ -52,6 +52,14 @@ pub(crate) struct Ticket {
     pub(crate) created_at: u128,
     pub(crate) updated_at: u128,
     pub(crate) file_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pr_link: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) workspace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) assignee: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
