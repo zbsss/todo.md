@@ -17,7 +17,7 @@ export type Ticket = {
   title: string;
   body: string;
   status: Status;
-  order: number;
+  rank: string;
   createdAt: number;
   updatedAt: number;
   filePath: string;

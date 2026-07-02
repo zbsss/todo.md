@@ -6,6 +6,7 @@ import type {
   TicketDraft
 } from "../app/types";
 import { bytesToDataUrl, imageExtensionForMime } from "../markdown/images";
+import { rankBetween, rankFromLegacyOrder } from "../tickets/ordering";
 
 const mockStorageKey = "todo.md-demo";
 
@@ -40,7 +41,7 @@ export function createMockStore() {
             title: "Capture app ideas",
             body: "Use **Markdown** for notes, links, and checklists.\n\n- Keep tickets portable\n- Make project folders easy to inspect",
             status: "todo",
-            order: 1000,
+            rank: rankBetween(),
             createdAt: now,
             updatedAt: now,
             filePath: "~/todo.md/projects/inbox/capture-app-ideas.md"
@@ -50,7 +51,7 @@ export function createMockStore() {
             title: "Sketch board columns",
             body: "Columns are intentionally small for now:\n\n- To do\n- Doing\n- Done",
             status: "doing",
-            order: 1000,
+            rank: rankBetween(),
             createdAt: now,
             updatedAt: now,
             filePath: "~/todo.md/projects/inbox/sketch-board-columns.md",
@@ -64,7 +65,7 @@ export function createMockStore() {
             title: "Keep tickets local",
             body: "Every card is backed by a plain `.md` file on disk.",
             status: "done",
-            order: 1000,
+            rank: rankBetween(),
             createdAt: now,
             updatedAt: now,
             filePath: "~/todo.md/projects/inbox/keep-tickets-local.md"
@@ -83,7 +84,7 @@ export function createMockStore() {
       return next;
     }
 
-    return JSON.parse(raw) as MockStore;
+    return normalizeStore(JSON.parse(raw) as MockStore);
   };
 
   const write = (store: MockStore) => localStorage.setItem(mockStorageKey, JSON.stringify(store));
@@ -192,7 +193,7 @@ export function createMockStore() {
         title,
         body: "",
         status,
-        order: (store.tickets[projectId]?.filter((candidate) => candidate.status === status).length ?? 0) * 1000 + 1000,
+        rank: nextRank(store.tickets[projectId] ?? [], status),
         createdAt: now,
         updatedAt: now,
         filePath: `~/todo.md/projects/${projectId}/${id}.md`
@@ -257,18 +258,18 @@ export function createMockStore() {
     async deleteTicketImage(_projectId: string, _markdownPath: string) {
       return;
     },
-    async reorderTickets(projectId: string, positions: Array<{ id: string; status: Status; order: number }>) {
+    async reorderTickets(projectId: string, positions: Array<{ id: string; status: Status; rank: string }>) {
       const store = read();
       const positionById = new Map(positions.map((position) => [position.id, position]));
 
       store.tickets[projectId] = (store.tickets[projectId] ?? []).map((ticket) => {
         const position = positionById.get(ticket.id);
 
-        return position
+        return position && (ticket.status !== position.status || ticket.rank !== position.rank)
           ? {
               ...ticket,
               status: position.status,
-              order: position.order,
+              rank: position.rank,
               updatedAt: Date.now()
             }
           : ticket;
@@ -292,7 +293,7 @@ export function createMockStore() {
         return null;
       }
 
-      const store = JSON.parse(raw) as MockStore;
+      const store = normalizeStore(JSON.parse(raw) as MockStore);
       let updated: Ticket | null = null;
 
       store.tickets[projectId] = (store.tickets[projectId] ?? []).map((ticket) => {
@@ -318,4 +319,30 @@ export function createMockStore() {
       return updated;
     }
   };
+}
+
+function nextRank(tickets: Ticket[], status: Status) {
+  const previousRank = tickets
+    .filter((ticket) => ticket.status === status)
+    .map((ticket) => ticket.rank)
+    .sort()
+    .at(-1);
+
+  return rankBetween(previousRank);
+}
+
+function normalizeStore(store: MockStore) {
+  store.tickets = Object.fromEntries(
+    Object.entries(store.tickets).map(([projectId, tickets]) => [
+      projectId,
+      tickets.map((ticket) => ({
+        ...ticket,
+        rank:
+          ticket.rank ??
+          rankFromLegacyOrder((ticket as Ticket & { order?: number }).order ?? 0, ticket.title, ticket.filePath)
+      }))
+    ])
+  );
+
+  return store;
 }

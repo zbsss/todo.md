@@ -68,7 +68,7 @@ import {
   titleDisplayValue,
   untitledTicketTitle
 } from "./markdown/title";
-import { insertTicket, renumberTickets, sortTickets } from "./tickets/ordering";
+import { insertTicket, rankForInsertion, sortTickets } from "./tickets/ordering";
 import "./styles.css";
 const columns: Array<{ id: Status; label: string; icon: string }> = [
   { id: "todo", label: "To do", icon: "list-todo" },
@@ -2053,9 +2053,16 @@ async function moveTicket(ticketId: string, status: Status, beforeId?: string) {
   }
 
   const remaining = state.tickets.filter((ticket) => ticket.id !== ticketId);
-  const nextTicket = { ...dragged, status };
+  const insertedTickets = insertTicket(remaining, { ...dragged, status }, status, beforeId);
+  const rank = rankForInsertion(insertedTickets, ticketId, status);
+
+  if (dragged.status === status && dragged.rank === rank) {
+    return;
+  }
+
+  const nextTicket = { ...dragged, status, rank };
   const nextTickets = insertTicket(remaining, nextTicket, status, beforeId).map((ticket) => ({ ...ticket }));
-  const positions = renumberTickets(nextTickets);
+  const positions = [{ id: ticketId, status, rank }];
 
   state.tickets = nextTickets.sort(sortTickets);
   render({ preserveScroll: true });

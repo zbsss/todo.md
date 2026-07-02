@@ -50,7 +50,7 @@ function ticket(overrides) {
     title: overrides.title ?? overrides.id,
     body: "",
     status: overrides.status ?? "todo",
-    order: overrides.order ?? 1000,
+    rank: overrides.rank ?? "V",
     createdAt: 1,
     updatedAt: 1,
     filePath: `${overrides.id}.md`,
@@ -58,17 +58,19 @@ function ticket(overrides) {
   };
 }
 
-test("sortTickets orders by board column, order, then title", () => {
+test("sortTickets orders by board column, rank, then title", () => {
   const tickets = [
-    ticket({ id: "done", status: "done", order: 1000 }),
-    ticket({ id: "doing", status: "doing", order: 1000 }),
-    ticket({ id: "todo-b", title: "B", status: "todo", order: 1000 }),
-    ticket({ id: "todo-a", title: "A", status: "todo", order: 1000 })
+    ticket({ id: "done", status: "done", rank: "V" }),
+    ticket({ id: "doing", status: "doing", rank: "V" }),
+    ticket({ id: "todo-c", status: "todo", rank: "l" }),
+    ticket({ id: "todo-b", title: "B", status: "todo", rank: "V" }),
+    ticket({ id: "todo-a", title: "A", status: "todo", rank: "V" })
   ];
 
   assert.deepEqual(tickets.sort(ordering.sortTickets).map((item) => item.id), [
     "todo-a",
     "todo-b",
+    "todo-c",
     "doing",
     "done"
   ]);
@@ -76,28 +78,60 @@ test("sortTickets orders by board column, order, then title", () => {
 
 test("insertTicket inserts before the requested ticket in the target status", () => {
   const existing = [
-    ticket({ id: "done", status: "done", order: 1000 }),
-    ticket({ id: "todo-b", status: "todo", order: 2000 }),
-    ticket({ id: "todo-a", status: "todo", order: 1000 })
+    ticket({ id: "done", status: "done", rank: "V" }),
+    ticket({ id: "todo-b", status: "todo", rank: "l" }),
+    ticket({ id: "todo-a", status: "todo", rank: "V" })
   ];
   const inserted = ordering.insertTicket(existing, ticket({ id: "todo-new", status: "todo" }), "todo", "todo-b");
 
   assert.deepEqual(inserted.map((item) => item.id), ["todo-a", "todo-new", "todo-b", "done"]);
 });
 
-test("renumberTickets assigns stable 1000-spaced orders within each status", () => {
+test("rankBetween creates sortable ranks between neighbors", () => {
+  const middle = ordering.rankBetween("V", "l");
+  const crowded = ordering.rankBetween("V", "VV");
+
+  assert.equal(ordering.isValidRank(middle), true);
+  assert.equal(ordering.isValidRank(crowded), true);
+  assert.equal("V" < middle && middle < "l", true);
+  assert.equal("V" < crowded && crowded < "VV", true);
+});
+
+test("rankForInsertion reuses the current rank when placement is unchanged", () => {
   const tickets = [
-    ticket({ id: "todo-a", status: "todo", order: 500 }),
-    ticket({ id: "todo-b", status: "todo", order: 9000 }),
-    ticket({ id: "doing-a", status: "doing", order: 100 })
+    ticket({ id: "todo-a", rank: "V" }),
+    ticket({ id: "todo-b", rank: "l" }),
+    ticket({ id: "todo-c", rank: "t" })
   ];
 
-  assert.deepEqual(ordering.renumberTickets(tickets), [
-    { id: "todo-a", status: "todo", order: 1000 },
-    { id: "todo-b", status: "todo", order: 2000 },
-    { id: "doing-a", status: "doing", order: 1000 }
-  ]);
-  assert.deepEqual(tickets.map((item) => item.order), [1000, 2000, 1000]);
+  assert.equal(ordering.rankForInsertion(tickets, "todo-b", "todo"), "l");
+});
+
+test("rankForInsertion creates a rank for the moved ticket without changing neighbors", () => {
+  const tickets = [
+    ticket({ id: "todo-a", rank: "V" }),
+    ticket({ id: "todo-new", rank: "z" }),
+    ticket({ id: "todo-b", rank: "l" })
+  ];
+  const rank = ordering.rankForInsertion(tickets, "todo-new", "todo");
+
+  assert.equal("V" < rank && rank < "l", true);
+  assert.deepEqual(tickets.map((item) => item.rank), ["V", "z", "l"]);
+});
+
+test("rankFromLegacyOrder preserves numeric order lexicographically", () => {
+  const ranks = [10000, 1000, -5, 0].map((order) => ordering.rankFromLegacyOrder(order));
+
+  assert.deepEqual([...ranks].sort(), [ranks[2], ranks[3], ranks[1], ranks[0]]);
+});
+
+test("rankFromLegacyOrder creates stable tie-breakers for duplicate orders", () => {
+  const first = ordering.rankFromLegacyOrder(1000, "A first", "/tasks/first.md");
+  const second = ordering.rankFromLegacyOrder(1000, "B second", "/tasks/second.md");
+  const missingOrder = ordering.rankFromLegacyOrder(0, "No order", "/tasks/no-order.md");
+
+  assert.equal(first < second, true);
+  assert.equal(missingOrder < first, true);
 });
 
 test("renderMarkdown escapes HTML and protects inline code from markdown formatting", () => {

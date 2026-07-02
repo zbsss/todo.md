@@ -48,7 +48,7 @@ pub(crate) struct Ticket {
     pub(crate) title: String,
     pub(crate) body: String,
     pub(crate) status: String,
-    pub(crate) order: i64,
+    pub(crate) rank: String,
     pub(crate) created_at: u128,
     pub(crate) updated_at: u128,
     pub(crate) file_path: String,
@@ -75,5 +75,5 @@ pub(crate) struct SavedTicketImage {
 pub(crate) struct TicketPosition {
     pub(crate) id: String,
     pub(crate) status: String,
-    pub(crate) order: i64,
+    pub(crate) rank: String,
 }

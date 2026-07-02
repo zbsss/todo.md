@@ -6,10 +6,14 @@ use std::{
 
 use crate::{
     constants::STATUSES,
-    models::Ticket,
+    models::{Ticket, TicketPosition},
     paths::ticket_storage_dir,
     text::{clean_title, infer_title, normalize_newlines, now_millis, safe_segment, slugify},
 };
+
+const RANK_ALPHABET: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+const MIN_RANK_DIGIT: char = '0';
+const MIN_RANK_BYTE: u8 = b'0';
 
 pub(crate) fn list_tickets_from_disk(project_dir: &Path) -> Result<Vec<Ticket>, String> {
     let mut tickets = Vec::new();
@@ -42,13 +46,7 @@ pub(crate) fn list_tickets_from_disk(project_dir: &Path) -> Result<Vec<Ticket>, 
     }
 
     normalize_ticket_ids(&mut tickets);
-    tickets.sort_by(|a, b| {
-        status_rank(&a.status)
-            .cmp(&status_rank(&b.status))
-            .then(a.order.cmp(&b.order))
-            .then(a.title.to_lowercase().cmp(&b.title.to_lowercase()))
-            .then(a.file_path.cmp(&b.file_path))
-    });
+    sort_tickets(&mut tickets);
 
     Ok(tickets)
 }
@@ -88,6 +86,8 @@ pub(crate) fn write_ticket(project_dir: &Path, mut ticket: Ticket) -> Result<Tic
         ticket.id = slugify(&ticket.id);
     }
 
+    ticket.rank = clean_rank(&ticket.rank).unwrap_or_else(initial_rank);
+
     ticket.pr_link = ticket
         .pr_link
         .take()
@@ -108,8 +108,8 @@ pub(crate) fn write_ticket(project_dir: &Path, mut ticket: Ticket) -> Result<Tic
     let path = ticket_write_path(&tasks_dir, &ticket)?;
     let body = ticket.body.trim_end();
     let mut contents = format!(
-        "---\nid: {}\ntitle: {}\nstatus: {}\norder: {}\ncreated_at: {}\nupdated_at: {}\n",
-        ticket.id, ticket.title, ticket.status, ticket.order, ticket.created_at, ticket.updated_at
+        "---\nid: {}\ntitle: {}\nstatus: {}\nrank: {}\ncreated_at: {}\nupdated_at: {}\n",
+        ticket.id, ticket.title, ticket.status, ticket.rank, ticket.created_at, ticket.updated_at
     );
     append_optional_frontmatter(&mut contents, "pr_link", ticket.pr_link.as_deref());
     append_optional_frontmatter(&mut contents, "branch", ticket.branch.as_deref());
@@ -125,21 +125,193 @@ pub(crate) fn write_ticket(project_dir: &Path, mut ticket: Ticket) -> Result<Tic
     Ok(ticket)
 }
 
-pub(crate) fn next_order(project_dir: &Path, status: &str) -> Result<i64, String> {
+pub(crate) fn next_rank(project_dir: &Path, status: &str) -> Result<String, String> {
     let tickets = list_tickets_from_disk(project_dir)?;
-    let max_order = tickets
+    let previous_rank = tickets
         .iter()
         .filter(|ticket| ticket.status == status)
-        .map(|ticket| ticket.order)
-        .max()
-        .unwrap_or(0);
+        .map(|ticket| ticket.rank.as_str())
+        .max();
 
-    Ok(max_order + 1000)
+    rank_between(previous_rank, None)
+}
+
+pub(crate) fn apply_ticket_positions(
+    project_dir: &Path,
+    positions: Vec<TicketPosition>,
+) -> Result<(), String> {
+    for position in positions {
+        validate_status(&position.status)?;
+        validate_rank(&position.rank)?;
+        let mut ticket = read_ticket(project_dir, &position.id)?;
+
+        if ticket.status == position.status && ticket.rank == position.rank {
+            continue;
+        }
+
+        ticket.status = position.status;
+        ticket.rank = position.rank;
+        ticket.updated_at = now_millis();
+        write_ticket(project_dir, ticket)?;
+    }
+
+    Ok(())
 }
 
 pub(crate) fn unique_ticket_id(project_dir: &Path, title: &str) -> String {
     let base = format!("{}-{}", now_millis(), slugify(title));
     unique_ticket_id_from_base(project_dir, &base)
+}
+
+pub(crate) fn validate_rank(rank: &str) -> Result<(), String> {
+    if is_valid_rank(rank) {
+        Ok(())
+    } else {
+        Err("Invalid rank.".to_string())
+    }
+}
+
+pub(crate) fn rank_between(
+    previous_rank: Option<&str>,
+    next_rank: Option<&str>,
+) -> Result<String, String> {
+    if let Some(rank) = previous_rank {
+        validate_rank(rank)?;
+    }
+
+    if let Some(rank) = next_rank {
+        validate_rank(rank)?;
+    }
+
+    if matches!((previous_rank, next_rank), (Some(previous), Some(next)) if previous >= next) {
+        return Err("Previous rank must sort before next rank.".to_string());
+    }
+
+    Ok(midpoint(previous_rank.unwrap_or(""), next_rank))
+}
+
+#[cfg(test)]
+pub(crate) fn rank_from_legacy_order(order: i64) -> String {
+    legacy_order_rank_prefix(order)
+}
+
+fn rank_from_legacy_order_with_tie(order: i64, title: &str, file_path: &str) -> String {
+    format!(
+        "{}{}0{}V",
+        legacy_order_rank_prefix(order),
+        rank_tie_breaker(title),
+        rank_tie_breaker(file_path)
+    )
+}
+
+fn legacy_order_rank_prefix(order: i64) -> String {
+    let shifted_order = i128::from(order) - i128::from(i64::MIN);
+
+    format!("U{shifted_order:020}V")
+}
+
+fn rank_tie_breaker(value: &str) -> String {
+    value
+        .to_lowercase()
+        .bytes()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+}
+
+fn initial_rank() -> String {
+    rank_between(None, None).unwrap_or_else(|_| "V".to_string())
+}
+
+fn clean_rank(value: &str) -> Option<String> {
+    let rank = value.trim();
+
+    if is_valid_rank(rank) {
+        Some(rank.to_string())
+    } else {
+        None
+    }
+}
+
+fn is_valid_rank(rank: &str) -> bool {
+    !rank.is_empty()
+        && !rank.ends_with(MIN_RANK_DIGIT)
+        && rank.bytes().all(|digit| RANK_ALPHABET.contains(&digit))
+}
+
+fn midpoint(previous_rank: &str, next_rank: Option<&str>) -> String {
+    let next_rank = next_rank.filter(|rank| !rank.is_empty());
+
+    if let Some(next_rank) = next_rank {
+        let mut shared_prefix_length = 0;
+        let previous_bytes = previous_rank.as_bytes();
+        let next_bytes = next_rank.as_bytes();
+
+        while shared_prefix_length < next_bytes.len()
+            && previous_bytes
+                .get(shared_prefix_length)
+                .copied()
+                .unwrap_or(MIN_RANK_BYTE)
+                == next_bytes[shared_prefix_length]
+        {
+            shared_prefix_length += 1;
+        }
+
+        if shared_prefix_length > 0 {
+            let previous_suffix = previous_rank.get(shared_prefix_length..).unwrap_or("");
+            return format!(
+                "{}{}",
+                &next_rank[..shared_prefix_length],
+                midpoint(previous_suffix, Some(&next_rank[shared_prefix_length..]))
+            );
+        }
+    }
+
+    let previous_digit = previous_rank
+        .as_bytes()
+        .first()
+        .map(|digit| rank_digit_index(*digit))
+        .unwrap_or(0);
+    let next_digit = next_rank
+        .and_then(|rank| rank.as_bytes().first().copied())
+        .map(rank_digit_index)
+        .unwrap_or(RANK_ALPHABET.len());
+
+    if next_digit - previous_digit > 1 {
+        return char::from(RANK_ALPHABET[(previous_digit + next_digit).div_ceil(2)]).to_string();
+    }
+
+    if let Some(next_rank) = next_rank.filter(|rank| rank.len() > 1) {
+        let previous_suffix = previous_rank.get(1..).unwrap_or("");
+        return format!(
+            "{}{}",
+            &next_rank[..1],
+            midpoint(previous_suffix, Some(&next_rank[1..]))
+        );
+    }
+
+    let previous_suffix = previous_rank.get(1..).unwrap_or("");
+    format!(
+        "{}{}",
+        char::from(RANK_ALPHABET[previous_digit]),
+        midpoint(previous_suffix, None)
+    )
+}
+
+fn rank_digit_index(digit: u8) -> usize {
+    RANK_ALPHABET
+        .iter()
+        .position(|candidate| *candidate == digit)
+        .unwrap_or(0)
+}
+
+fn sort_tickets(tickets: &mut [Ticket]) {
+    tickets.sort_by(|a, b| {
+        status_rank(&a.status)
+            .cmp(&status_rank(&b.status))
+            .then(a.rank.cmp(&b.rank))
+            .then(a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+            .then(a.file_path.cmp(&b.file_path))
+    });
 }
 
 pub(crate) fn unique_ticket_id_from_base(project_dir: &Path, base: &str) -> String {
@@ -236,15 +408,23 @@ fn parse_ticket_file(path: &Path) -> Result<Ticket, String> {
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| infer_title(&body, file_stem));
 
+    let legacy_order = frontmatter
+        .get("order")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    let rank = frontmatter
+        .get("rank")
+        .and_then(|value| clean_rank(value))
+        .unwrap_or_else(|| {
+            rank_from_legacy_order_with_tie(legacy_order, &title, &path.to_string_lossy())
+        });
+
     Ok(Ticket {
         id,
         title,
         body: body.trim().to_string(),
         status,
-        order: frontmatter
-            .get("order")
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(0),
+        rank,
         created_at: frontmatter
             .get("created_at")
             .and_then(|value| value.parse().ok())
