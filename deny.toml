@@ -5,6 +5,10 @@ all-features = true
 version = 2
 yanked = "warn"
 unmaintained = "workspace"
+ignore = [
+  { id = "RUSTSEC-2026-0194", reason = "Blocked by plist 1.9.0 through Tauri; remove when plist supports quick-xml >= 0.41.0." },
+  { id = "RUSTSEC-2026-0195", reason = "Blocked by plist 1.9.0 through Tauri; remove when plist supports quick-xml >= 0.41.0." },
+]
 
 [licenses]
 version = 2

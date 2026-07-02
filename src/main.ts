@@ -42,6 +42,12 @@ import {
   Trash2,
   X
 } from "lucide";
+import {
+  createBackdropDismissState,
+  recordBackdropPointerDown,
+  resetBackdropDismissState,
+  shouldDismissEditorOnBackdropPointerUp
+} from "./editorBackdropClose";
 import "./styles.css";
 
 type Status = "todo" | "doing" | "done";
@@ -1359,10 +1365,20 @@ function bindEditorEvents() {
     mountMarkdownEditor(editorRoot, state.draft.body);
   }
 
-  backdrop?.addEventListener("click", (event) => {
-    if (event.target === backdrop) {
+  const backdropDismissState = createBackdropDismissState();
+
+  backdrop?.addEventListener("pointerdown", (event) => {
+    recordBackdropPointerDown(backdropDismissState, event.target, backdrop);
+  });
+
+  backdrop?.addEventListener("pointerup", (event) => {
+    if (shouldDismissEditorOnBackdropPointerUp(backdropDismissState, event.target, backdrop)) {
       void requestCloseEditor();
     }
+  });
+
+  backdrop?.addEventListener("pointercancel", () => {
+    resetBackdropDismissState(backdropDismissState);
   });
 
   panel?.addEventListener("click", (event) => {
