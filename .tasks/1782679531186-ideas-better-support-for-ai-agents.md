@@ -2,15 +2,15 @@
 id: 1782679531186-ideas-better-support-for-ai-agents
 title: Idea: Better support for AI Agents
 status: todo
-order: 10000
+order: 5000
 created_at: 1782679531186
-updated_at: 1782954245208
+updated_at: 1783008951061
 ---
 
 Add more metadata like:
 - PR link
 - Branch/workspace
-- assignee - which codex agent
+- assignee - which codex agent (could we have a link that open directly the local codex app - not the browser)?
 
 Minimal CLI + skill to allow agents to easily find Todo tasks.
 
