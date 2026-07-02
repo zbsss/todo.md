@@ -629,15 +629,12 @@ select:focus {
 }
 
 .ticket-title {
-  display: flex;
+  display: inline;
   min-width: 0;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
 }
 
 .ticket-title-text {
-  min-width: 0;
+  display: inline;
   overflow-wrap: anywhere;
 }
 
@@ -648,6 +645,7 @@ select:focus {
   place-items: center;
   overflow: hidden;
   border-radius: 6px;
+  margin-right: 6px;
   padding: 0 7px;
   font-size: 0.68rem;
   font-weight: 850;
@@ -655,6 +653,7 @@ select:focus {
   line-height: 1.3;
   text-overflow: ellipsis;
   text-transform: uppercase;
+  vertical-align: 0.12em;
   white-space: nowrap;
 }
 
@@ -898,6 +897,39 @@ select:focus {
 
 .editor-header > div:first-child {
   min-width: 0;
+}
+
+.title-display {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin-top: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: text;
+  font-size: clamp(1.35rem, 2.2vw, 2rem);
+  font-weight: 800;
+  line-height: 1.12;
+  overflow-wrap: anywhere;
+  padding: 0;
+  text-align: left;
+}
+
+.title-display:focus {
+  outline: none;
+}
+
+.title-display:focus-visible {
+  border-radius: 6px;
+  box-shadow: 0 0 0 3px rgba(35, 108, 90, 0.14);
+}
+
+.title-display .ticket-title-chip {
+  min-height: 24px;
+  padding: 0 9px;
+  font-size: 0.78rem;
+  vertical-align: 0.18em;
 }
 
 .title-input {

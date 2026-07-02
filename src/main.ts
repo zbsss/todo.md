@@ -551,13 +551,30 @@ function renderEditor() {
     return "";
   }
 
+  const displayTitle = titleDisplayValue(state.draft.title);
+
   return `
     <div class="modal-backdrop" data-action="close-editor">
-      <section class="editor-panel" role="dialog" aria-modal="true" aria-labelledby="editor-title" tabindex="-1">
+      <section class="editor-panel" role="dialog" aria-modal="true" aria-label="Ticket editor" tabindex="-1">
         <header class="editor-header">
           <div>
             <p class="eyebrow">Ticket</p>
-            <input id="editor-title" class="title-input" name="title" value="${escapeAttr(state.draft.title)}" />
+            <button
+              id="editor-title"
+              type="button"
+              class="title-display"
+              data-action="edit-title"
+              aria-label="Edit title: ${escapeAttr(displayTitle)}"
+            >
+              ${renderTicketTitle(displayTitle)}
+            </button>
+            <input
+              class="title-input"
+              name="title"
+              value="${escapeAttr(state.draft.title)}"
+              aria-label="Title"
+              hidden
+            />
           </div>
           <div class="editor-actions">
             ${renderStatusSelector(state.draft.status)}
@@ -1373,12 +1390,27 @@ function bindEditorEvents() {
     if (action === "delete-ticket") {
       void deleteSelectedTicket();
     }
+
+    if (action === "edit-title") {
+      showEditorTitleInput();
+    }
   });
 
   titleInput?.addEventListener("input", () => {
     if (state.draft) {
       state.draft.title = titleInput.value;
       scheduleDraftSave();
+    }
+  });
+
+  titleInput?.addEventListener("blur", () => {
+    showEditorTitleDisplay();
+  });
+
+  titleInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      showEditorTitleDisplay({ focus: true });
     }
   });
 
@@ -1393,6 +1425,44 @@ function bindEditorEvents() {
       closeStatusSelector(statusSelector);
     }
   });
+}
+
+function showEditorTitleInput() {
+  const titleDisplay = document.querySelector<HTMLButtonElement>(".title-display");
+  const titleInput = document.querySelector<HTMLInputElement>('.editor-panel input[name="title"]');
+
+  if (!titleDisplay || !titleInput) {
+    return;
+  }
+
+  titleDisplay.hidden = true;
+  titleInput.hidden = false;
+  titleInput.focus();
+  titleInput.select();
+}
+
+function showEditorTitleDisplay(options: { focus?: boolean } = {}) {
+  const titleDisplay = document.querySelector<HTMLButtonElement>(".title-display");
+  const titleInput = document.querySelector<HTMLInputElement>('.editor-panel input[name="title"]');
+
+  if (!titleDisplay || !titleInput || !state.draft) {
+    return;
+  }
+
+  const displayTitle = titleDisplayValue(state.draft.title);
+
+  titleDisplay.innerHTML = renderTicketTitle(displayTitle);
+  titleDisplay.setAttribute("aria-label", `Edit title: ${displayTitle}`);
+  titleInput.hidden = true;
+  titleDisplay.hidden = false;
+
+  if (options.focus) {
+    titleDisplay.focus();
+  }
+}
+
+function titleDisplayValue(title: string) {
+  return title.trim() ? title : untitledTicketTitle;
 }
 
 function bindGlobalKeys() {
@@ -1440,17 +1510,7 @@ function openEditor(ticketId: string) {
   };
   state.draftSaveError = null;
   render();
-  focusEditorPanel();
-}
-
-function focusEditorPanel() {
-  const panel = document.querySelector<HTMLElement>(".editor-panel");
-
-  if (!panel) {
-    return;
-  }
-
-  panel.focus({ preventScroll: true });
+  document.querySelector<HTMLButtonElement>(".title-display")?.focus();
 }
 
 function closeEditor() {
