@@ -32,6 +32,7 @@ execFileSync(
     "--strict",
     "--skipLibCheck",
     resolve(repoRoot, "src/tickets/ordering.ts"),
+    resolve(repoRoot, "src/tickets/table.ts"),
     resolve(repoRoot, "src/markdown/render.ts"),
     resolve(repoRoot, "src/markdown/title.ts"),
     resolve(repoRoot, "src/markdown/images.ts")
@@ -40,6 +41,7 @@ execFileSync(
 );
 
 const ordering = await import(pathToFileURL(join(outDir, "tickets/ordering.js")).href);
+const table = await import(pathToFileURL(join(outDir, "tickets/table.js")).href);
 const markdown = await import(pathToFileURL(join(outDir, "markdown/render.js")).href);
 const title = await import(pathToFileURL(join(outDir, "markdown/title.js")).href);
 const images = await import(pathToFileURL(join(outDir, "markdown/images.js")).href);
@@ -132,6 +134,54 @@ test("rankFromLegacyOrder creates stable tie-breakers for duplicate orders", () 
 
   assert.equal(first < second, true);
   assert.equal(missingOrder < first, true);
+});
+
+test("sortTicketsForTable defaults to status then priority", () => {
+  const tickets = [
+    ticket({ id: "done-p0", status: "done", priority: "P0" }),
+    ticket({ id: "todo-p3", status: "todo", priority: "P3" }),
+    ticket({ id: "todo-none", status: "todo" }),
+    ticket({ id: "todo-p0", status: "todo", priority: "P0" }),
+    ticket({ id: "doing-p1", status: "doing", priority: "P1" })
+  ];
+
+  assert.deepEqual(table.sortTicketsForTable(tickets, null).map((item) => item.id), [
+    "todo-p0",
+    "todo-p3",
+    "todo-none",
+    "doing-p1",
+    "done-p0"
+  ]);
+});
+
+test("sortTicketsForTable sorts by an explicit table column", () => {
+  const tickets = [
+    ticket({ id: "small", size: "S" }),
+    ticket({ id: "xl", size: "XL" }),
+    ticket({ id: "medium", size: "M" })
+  ];
+
+  assert.deepEqual(
+    table.sortTicketsForTable(tickets, { column: "size", direction: "desc" }).map((item) => item.id),
+    ["xl", "medium", "small"]
+  );
+});
+
+test("filterTicketsForTable matches column values and labels", () => {
+  const tickets = [
+    ticket({ id: "with-pr", status: "todo", prLink: "https://github.com/zbsss/todo.md/pull/178" }),
+    ticket({ id: "doing-task", status: "doing", assignee: "codex://threads/019f239d-dd6d-7451-856c-3847cadaf912" }),
+    ticket({ id: "done-task", status: "done" })
+  ];
+
+  assert.deepEqual(
+    table.filterTicketsForTable(tickets, { status: "doing", assignee: "019f239d" }).map((item) => item.id),
+    ["doing-task"]
+  );
+  assert.deepEqual(table.filterTicketsForTable(tickets, { pr: "#178" }).map((item) => item.id), ["with-pr"]);
+  assert.deepEqual(table.filterTicketsForTable(tickets, { assignee: "empty", pr: "empty" }).map((item) => item.id), [
+    "done-task"
+  ]);
 });
 
 test("renderMarkdown escapes HTML and protects inline code from markdown formatting", () => {

@@ -38,6 +38,7 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Table2,
   Trash2,
   X
 } from "lucide";
@@ -71,6 +72,15 @@ import {
   untitledTicketTitle
 } from "./markdown/title";
 import { insertTicket, rankForInsertion, sortTickets } from "./tickets/ordering";
+import {
+  defaultTableSorts,
+  filterTicketsForTable,
+  hasActiveTableFilters,
+  sortTicketsForTable,
+  type TableColumn,
+  type TableFilters,
+  type TableSort
+} from "./tickets/table";
 import "./styles.css";
 const columns: Array<{ id: Status; label: string; icon: string }> = [
   { id: "todo", label: "To do", icon: "list-todo" },
@@ -94,6 +104,14 @@ const appRoot = app;
 const ticketDragType = "application/x-todo-md-ticket";
 const projectDragType = "application/x-todo-md-project";
 const maxPastedImageBytes = 25 * 1024 * 1024;
+const projectViewModeStorageKey = "todo.md.project-view-modes";
+
+type ProjectViewMode = "board" | "table";
+
+type ProjectTableState = {
+  sort: TableSort | null;
+  filters: TableFilters;
+};
 
 const state: {
   workspace: WorkspaceInfo | null;
@@ -110,6 +128,8 @@ const state: {
   isLoading: boolean;
   error: string | null;
   draftSaveError: string | null;
+  projectViewModes: Record<string, ProjectViewMode>;
+  projectTableStates: Record<string, ProjectTableState>;
 } = {
   workspace: null,
   selectedProjectId: null,
@@ -124,7 +144,9 @@ const state: {
   renamingProjectName: "",
   isLoading: true,
   error: null,
-  draftSaveError: null
+  draftSaveError: null,
+  projectViewModes: readProjectViewModes(),
+  projectTableStates: {}
 };
 
 const runtime = detectAppRuntime();
@@ -242,10 +264,13 @@ function render(options: RenderOptions = {}) {
             <h2>${escapeHtml(currentProject?.name ?? "No project")}</h2>
             <p class="project-path">${escapeHtml(currentProject?.path ?? "Create a project to begin")}</p>
           </div>
-          <button class="ghost-button" data-action="refresh" title="Refresh board">
-            ${icon("refresh-cw")}
-            <span>Refresh</span>
-          </button>
+          <div class="topbar-actions">
+            ${renderViewSwitcher()}
+            <button class="ghost-button" data-action="refresh" title="Refresh board">
+              ${icon("refresh-cw")}
+              <span>Refresh</span>
+            </button>
+          </div>
         </header>
 
         ${state.error ? `<div class="notice">${escapeHtml(state.error)}</div>` : ""}
@@ -294,6 +319,37 @@ function renderProjects(projects: ProjectSummary[]) {
       `;
     })
     .join("");
+}
+
+function renderViewSwitcher() {
+  const viewMode = currentProjectViewMode();
+
+  return `
+    <div class="view-switcher" role="group" aria-label="Project view">
+      <button
+        type="button"
+        class="view-switcher-button ${viewMode === "board" ? "active" : ""}"
+        data-action="set-project-view"
+        data-view-mode="board"
+        aria-pressed="${viewMode === "board"}"
+        title="Board view"
+      >
+        ${icon("list-todo")}
+        <span>Board</span>
+      </button>
+      <button
+        type="button"
+        class="view-switcher-button ${viewMode === "table" ? "active" : ""}"
+        data-action="set-project-view"
+        data-view-mode="table"
+        aria-pressed="${viewMode === "table"}"
+        title="Table view"
+      >
+        ${icon("table-2")}
+        <span>Table</span>
+      </button>
+    </div>
+  `;
 }
 
 function renderProjectMenu() {
@@ -434,6 +490,14 @@ function renderBoard() {
     `;
   }
 
+  if (currentProjectViewMode() === "table") {
+    return renderTableView();
+  }
+
+  return renderKanbanBoard();
+}
+
+function renderKanbanBoard() {
   return `
     <div class="board" aria-label="Task board">
       ${columns.map(renderColumn).join("")}
@@ -442,6 +506,36 @@ function renderBoard() {
 }
 
 function renderLoadingBoard() {
+  if (state.selectedProjectId && currentProjectViewMode() === "table") {
+    return `
+      <div class="table-view">
+        <div class="table-summary">
+          <div class="skeleton table-summary-skeleton"></div>
+        </div>
+        <div class="task-table-scroll">
+          <table class="task-table" aria-label="Loading task table">
+            <thead>
+              <tr>
+                ${tableColumnConfigs().map((column) => `<th scope="col">${escapeHtml(column.label)}</th>`).join("")}
+              </tr>
+            </thead>
+            <tbody>
+              ${Array.from({ length: 5 })
+                .map(
+                  () => `
+                    <tr>
+                      ${tableColumnConfigs().map(() => `<td><div class="skeleton table-cell-skeleton"></div></td>`).join("")}
+                    </tr>
+                  `
+                )
+                .join("")}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+
   return `
     <div class="board">
       ${columns
@@ -484,6 +578,186 @@ function renderColumn(column: { id: Status; label: string; icon: string }) {
         </button>
       </form>
     </section>
+  `;
+}
+
+function renderTableView() {
+  const tickets = tableTickets();
+  const tableState = currentProjectTableState();
+  const hasFilters = hasActiveTableFilters(tableState.filters);
+
+  return `
+    <div class="table-view" aria-label="Task table">
+      <div class="table-summary">
+        <span>${tickets.length} ${tickets.length === 1 ? "task" : "tasks"}</span>
+        ${hasFilters ? `
+          <button class="table-clear-button" data-action="clear-table-filters" title="Clear filters">
+            ${icon("x")}
+            <span>Clear</span>
+          </button>
+        ` : ""}
+      </div>
+      <div class="task-table-scroll">
+        <table class="task-table">
+          <thead>
+            <tr>
+              ${tableColumnConfigs().map((column) => renderTableHeaderCell(column, tableState.sort)).join("")}
+            </tr>
+            <tr class="table-filter-row">
+              ${tableColumnConfigs().map((column) => renderTableFilterCell(column, tableState.filters)).join("")}
+            </tr>
+          </thead>
+          <tbody>
+            ${tickets.length ? tickets.map((ticket) => renderTableRow(ticket)).join("") : renderEmptyTableRow()}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function tableColumnConfigs(): Array<{ id: TableColumn; label: string }> {
+  return [
+    { id: "title", label: "Title" },
+    { id: "status", label: "Status" },
+    { id: "assignee", label: "Assignee" },
+    { id: "priority", label: "Priority" },
+    { id: "size", label: "Size" },
+    { id: "pr", label: "PR" }
+  ];
+}
+
+function renderTableHeaderCell(column: { id: TableColumn; label: string }, sort: TableSort | null) {
+  const defaultSortIndex = sort ? -1 : defaultTableSortIndex(column.id);
+  const isActive = sort?.column === column.id || defaultSortIndex >= 0;
+  const direction = sort?.column === column.id ? sort.direction : "asc";
+  const isPrimarySort = sort ? sort.column === column.id : defaultSortIndex === 0;
+  const ariaSort = isPrimarySort ? (direction === "asc" ? "ascending" : "descending") : "none";
+
+  return `
+    <th scope="col" class="task-table-heading task-table-heading-${column.id}" aria-sort="${ariaSort}">
+      <button
+        type="button"
+        class="table-heading-button ${isActive ? "active" : ""}"
+        data-action="sort-table"
+        data-table-column="${column.id}"
+        title="Sort by ${escapeAttr(column.label)}"
+      >
+        <span>${escapeHtml(column.label)}</span>
+        ${renderTableSortIndicator(isActive, direction, defaultSortIndex)}
+      </button>
+    </th>
+  `;
+}
+
+function renderTableSortIndicator(isActive: boolean, direction: "asc" | "desc", defaultSortIndex: number) {
+  if (!isActive) {
+    return `<span class="table-sort-indicator"></span>`;
+  }
+
+  return `
+    <span class="table-sort-indicator active" aria-hidden="true">
+      ${icon(direction === "asc" ? "arrow-up" : "arrow-down")}
+      ${defaultSortIndex >= 0 ? `<span>${defaultSortIndex + 1}</span>` : ""}
+    </span>
+  `;
+}
+
+function renderTableFilterCell(column: { id: TableColumn; label: string }, filters: TableFilters) {
+  return `
+    <th scope="col" class="task-table-filter task-table-filter-${column.id}">
+      <input
+        data-action="filter-table"
+        data-table-column="${column.id}"
+        aria-label="Filter ${escapeAttr(column.label)}"
+        placeholder="Filter"
+        value="${escapeAttr(filters[column.id] ?? "")}"
+      />
+    </th>
+  `;
+}
+
+function renderTableRow(ticket: Ticket) {
+  const canReorder = canReorderTableRows();
+
+  return `
+    <tr
+      class="task-table-row"
+      data-ticket-id="${escapeAttr(ticket.id)}"
+      draggable="${canReorder}"
+      tabindex="0"
+      aria-label="${escapeAttr(ticketCardAriaLabel(ticket))}"
+      aria-keyshortcuts="Enter ArrowUp ArrowDown"
+    >
+      <td class="task-table-cell task-table-title-cell">
+        <span class="table-drag-handle ${canReorder ? "" : "disabled"}" title="Drag to reorder">${icon("grip-vertical")}</span>
+        <button type="button" class="table-title-button" data-action="open-table-ticket">
+          ${renderTicketTitle(ticket.title)}
+        </button>
+      </td>
+      <td class="task-table-cell task-table-status-cell">
+        ${renderTaskSelector("status", ticket.status, {
+          owner: "table",
+          ticketId: ticket.id,
+          className: "table-selector"
+        })}
+      </td>
+      <td class="task-table-cell task-table-assignee-cell">
+        ${renderTableLinkCell(ticket.assignee, "assignee")}
+      </td>
+      <td class="task-table-cell task-table-priority-cell">
+        ${renderTaskSelector("priority", ticket.priority, {
+          owner: "table",
+          ticketId: ticket.id,
+          className: "table-selector table-selector-compact"
+        })}
+      </td>
+      <td class="task-table-cell task-table-size-cell">
+        ${renderTaskSelector("size", ticket.size, {
+          owner: "table",
+          ticketId: ticket.id,
+          className: "table-selector table-selector-compact"
+        })}
+      </td>
+      <td class="task-table-cell task-table-pr-cell">
+        ${renderTableLinkCell(ticket.prLink, "pr")}
+      </td>
+    </tr>
+  `;
+}
+
+function renderTableLinkCell(value: string | undefined, kind: "assignee" | "pr") {
+  const metadata = metadataValue(value);
+
+  if (!metadata) {
+    return `<span class="table-muted">Empty</span>`;
+  }
+
+  const href = kind === "pr"
+    ? safeMetadataHref(metadata, ["https:", "http:"])
+    : safeMetadataHref(metadata, ["codex:", "https:", "http:"]);
+  const label = kind === "pr" ? formatPullRequestLabel(metadata) : formatAssigneeLabel(metadata);
+
+  if (!href) {
+    return `<span class="table-link-label">${escapeHtml(label)}</span>`;
+  }
+
+  return `
+    <a class="table-link-label is-link" href="${escapeAttr(href)}" rel="noreferrer" data-table-link>
+      ${escapeHtml(label)}
+    </a>
+  `;
+}
+
+function renderEmptyTableRow() {
+  return `
+    <tr class="task-table-empty-row">
+      <td colspan="${tableColumnConfigs().length}">
+        <div class="empty-board">
+          <h3>No matching tasks</h3>
+        </div>
+      </td>
+    </tr>
   `;
 }
 
@@ -777,14 +1051,29 @@ type TaskSelectorOption = {
   icon?: string;
 };
 
-function renderTaskSelector(kind: TaskSelectorKind, value: string | undefined) {
+type RenderTaskSelectorOptions = {
+  owner?: "editor" | "table";
+  ticketId?: string;
+  className?: string;
+};
+
+function renderTaskSelector(kind: TaskSelectorKind, value: string | undefined, options: RenderTaskSelectorOptions = {}) {
   const config = taskSelectorConfig(kind);
   const selected = selectedTaskSelectorOption(kind, value);
   const isCompactCurrentValue = isCompactTaskSelectorCurrentValue(kind);
   const currentLabel = taskSelectorCurrentLabel(kind, selected, config.placeholder);
+  const owner = options.owner ?? "editor";
+  const ticketAttribute = options.ticketId ? ` data-ticket-id="${escapeAttr(options.ticketId)}"` : "";
+  const extraClass = options.className ? ` ${escapeAttr(options.className)}` : "";
 
   return `
-    <div class="status-selector task-selector task-selector-${kind}" data-task-selector data-selector-kind="${kind}">
+    <div
+      class="status-selector task-selector task-selector-${kind}${extraClass}"
+      data-task-selector
+      data-selector-kind="${kind}"
+      data-selector-owner="${owner}"
+      ${ticketAttribute}
+    >
       <button
         type="button"
         class="status-selector-button"
@@ -913,9 +1202,52 @@ function taskSelectorMarkClass(kind: TaskSelectorKind, value: string) {
 
 function bindEvents() {
   bindProjectEvents();
+  bindViewEvents();
   bindTicketEvents();
   bindMetadataEvents();
   bindEditorEvents();
+}
+
+function bindViewEvents() {
+  document.querySelectorAll<HTMLButtonElement>('[data-action="set-project-view"]').forEach((button) => {
+    button.addEventListener("click", () => {
+      const viewMode = button.dataset.viewMode;
+
+      if (viewMode === "board" || viewMode === "table") {
+        setCurrentProjectViewMode(viewMode);
+      }
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>('[data-action="sort-table"]').forEach((button) => {
+    button.addEventListener("click", () => {
+      const column = button.dataset.tableColumn;
+
+      if (isTableColumn(column)) {
+        toggleTableSort(column);
+      }
+    });
+  });
+
+  document.querySelectorAll<HTMLInputElement>('[data-action="filter-table"]').forEach((input) => {
+    input.addEventListener("input", () => {
+      const column = input.dataset.tableColumn;
+
+      if (!isTableColumn(column)) {
+        return;
+      }
+
+      const selectionStart = input.selectionStart;
+      const selectionEnd = input.selectionEnd;
+      setTableFilter(column, input.value, { selectionStart, selectionEnd });
+    });
+  });
+
+  document.querySelector<HTMLButtonElement>('[data-action="clear-table-filters"]')?.addEventListener("click", () => {
+    const tableState = currentProjectTableState();
+    tableState.filters = {};
+    render({ preserveScroll: true });
+  });
 }
 
 function bindProjectEvents() {
@@ -1496,6 +1828,8 @@ function bindTicketEvents() {
     });
   });
 
+  bindTableTicketEvents();
+
   document.querySelectorAll<HTMLElement>(".ticket-card").forEach((card) => {
     card.addEventListener("click", (event) => {
       if ((event.target as HTMLElement).closest("a.ticket-metadata-item")) {
@@ -1628,6 +1962,166 @@ function bindTicketEvents() {
       clearDropIndicators();
       await moveTicket(ticketId, status, beforeId);
     });
+  });
+}
+
+function bindTableTicketEvents() {
+  const table = document.querySelector<HTMLElement>(".task-table");
+  const tableBody = table?.querySelector<HTMLElement>("tbody");
+
+  table?.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement;
+    const tableLink = target.closest<HTMLAnchorElement>("a[data-table-link]");
+
+    if (tableLink) {
+      event.preventDefault();
+      event.stopPropagation();
+      void openMetadataLink(tableLink.href);
+      return;
+    }
+
+    const clickedTaskSelector = target.closest<HTMLElement>("[data-task-selector]");
+    closeTaskSelectorsExcept(clickedTaskSelector);
+
+    const actionButton = target.closest<HTMLButtonElement>("button[data-action]");
+
+    if (!actionButton?.dataset.action) {
+      return;
+    }
+
+    const action = actionButton.dataset.action;
+
+    if (action === "open-table-ticket") {
+      const ticketId = actionButton.closest<HTMLElement>(".task-table-row")?.dataset.ticketId;
+
+      if (ticketId) {
+        openEditor(ticketId);
+      }
+      return;
+    }
+
+    if (action === "toggle-task-selector") {
+      toggleTaskSelector(actionButton.closest<HTMLElement>("[data-task-selector]"));
+      return;
+    }
+
+    if (action === "choose-task-selector") {
+      void chooseTableSelectorValue(actionButton.dataset.selectorValue, actionButton);
+    }
+  });
+
+  document.querySelectorAll<HTMLElement>(".task-table-row").forEach((row) => {
+    row.addEventListener("keydown", (event) => {
+      if (event.target !== row) {
+        return;
+      }
+
+      const ticketId = row.dataset.ticketId;
+
+      if (!ticketId) {
+        return;
+      }
+
+      if (event.key === "Enter") {
+        openEditor(ticketId);
+      }
+
+      if ((event.key === "ArrowUp" || event.key === "ArrowDown") && canReorderTableRows()) {
+        event.preventDefault();
+        void moveFocusedTableTicket(ticketId, event.key === "ArrowUp" ? "up" : "down");
+      }
+    });
+
+    row.addEventListener("dragstart", (event) => {
+      const ticketId = row.dataset.ticketId;
+
+      if (!canReorderTableRows() || !ticketId || !event.dataTransfer) {
+        event.preventDefault();
+        return;
+      }
+
+      state.draggingId = ticketId;
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData(ticketDragType, ticketId);
+      row.classList.add("is-dragging");
+      closeTicketMenu({ shouldRender: false });
+    });
+
+    row.addEventListener("dragover", (event) => {
+      if (!state.draggingId || !canReorderTableRows()) {
+        return;
+      }
+
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "move";
+      }
+
+      const body = row.closest<HTMLElement>("tbody");
+
+      if (body) {
+        updateTableDropIndicator(body, getTableInsertionBeforeId(body, event.clientY));
+      }
+    });
+
+    row.addEventListener("drop", async (event) => {
+      if (!canReorderTableRows()) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      const body = row.closest<HTMLElement>("tbody");
+      const ticketId = event.dataTransfer?.getData(ticketDragType) || state.draggingId;
+      const beforeId = body ? getTableInsertionBeforeId(body, event.clientY) : undefined;
+
+      clearTableDropIndicators();
+
+      if (ticketId) {
+        await moveTableTicket(ticketId, beforeId);
+      }
+    });
+
+    row.addEventListener("dragend", () => {
+      state.draggingId = null;
+      clearTableDropIndicators();
+      document
+        .querySelectorAll(".task-table-row.is-dragging")
+        .forEach((node) => node.classList.remove("is-dragging"));
+    });
+  });
+
+  tableBody?.addEventListener("dragover", (event) => {
+    if (!state.draggingId || !canReorderTableRows()) {
+      return;
+    }
+
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "move";
+    }
+
+    updateTableDropIndicator(tableBody, getTableInsertionBeforeId(tableBody, event.clientY));
+  });
+
+  tableBody?.addEventListener("drop", async (event) => {
+    if (!canReorderTableRows()) {
+      return;
+    }
+
+    event.preventDefault();
+    const ticketId = event.dataTransfer?.getData(ticketDragType) || state.draggingId;
+    const beforeId = getTableInsertionBeforeId(tableBody, event.clientY);
+
+    clearTableDropIndicators();
+
+    if (ticketId) {
+      await moveTableTicket(ticketId, beforeId);
+    }
+  });
+
+  document.querySelector<HTMLElement>(".task-table-scroll")?.addEventListener("scroll", () => {
+    closeTaskSelector();
   });
 }
 
@@ -2308,6 +2802,183 @@ async function moveFocusedTicket(ticketId: string, direction: KeyboardMoveDirect
   focusTicket(ticketId);
 }
 
+async function moveTableTicket(ticketId: string, beforeId?: string) {
+  if (!state.selectedProjectId) {
+    return;
+  }
+
+  const ticket = getTicket(ticketId);
+
+  if (!ticket || beforeId === ticketId) {
+    return;
+  }
+
+  const projectId = state.selectedProjectId;
+  const target = tableDropTarget(ticket, beforeId);
+  const movedTicket = {
+    ...ticket,
+    status: target.status,
+    priority: target.priority
+  };
+  const remaining = state.tickets.filter((candidate) => candidate.id !== ticketId);
+  const insertedTickets = insertTicket(remaining, movedTicket, target.status, target.beforeId);
+  const rank = rankForInsertion(insertedTickets, ticketId, target.status);
+
+  if (ticket.status === target.status && ticket.priority === target.priority && ticket.rank === rank) {
+    return;
+  }
+
+  const previousTickets = state.tickets;
+  const nextTicket = { ...movedTicket, rank };
+  const nextTickets = insertTicket(remaining, nextTicket, target.status, target.beforeId).map((candidate) => ({
+    ...candidate
+  }));
+
+  state.tickets = nextTickets.sort(sortTickets);
+  render({ preserveScroll: true });
+  focusTicket(ticketId);
+
+  try {
+    let updatedMetadata: Ticket | null = null;
+
+    if (ticket.status !== target.status || ticket.priority !== target.priority) {
+      updatedMetadata = await api.updateTicket(
+        projectId,
+        ticket.id,
+        ticket.title,
+        ticket.body,
+        target.status,
+        target.priority ?? null,
+        ticket.size ?? null
+      );
+    }
+
+    if (ticket.status !== target.status || ticket.rank !== rank) {
+      state.tickets = await api.reorderTickets(projectId, [{ id: ticketId, status: target.status, rank }]);
+    } else if (updatedMetadata) {
+      state.tickets = state.tickets.map((candidate) =>
+        candidate.id === updatedMetadata.id ? updatedMetadata : candidate
+      );
+    }
+
+    render({ preserveScroll: true });
+    focusTicket(ticketId);
+  } catch (error) {
+    showError(error, { preserveScroll: true });
+
+    try {
+      await loadTickets(projectId);
+    } catch {
+      state.tickets = previousTickets;
+    }
+
+    render({ preserveScroll: true });
+    focusTicket(ticketId);
+  }
+}
+
+async function moveFocusedTableTicket(ticketId: string, direction: KeyboardMoveDirection) {
+  const tickets = tableTickets();
+  const index = tickets.findIndex((ticket) => ticket.id === ticketId);
+
+  if (index === -1) {
+    return;
+  }
+
+  if (direction === "up" && index === 0) {
+    return;
+  }
+
+  if (direction === "down" && index >= tickets.length - 1) {
+    return;
+  }
+
+  const beforeId = direction === "up" ? tickets[index - 1]?.id : tickets[index + 2]?.id;
+  await moveTableTicket(ticketId, beforeId);
+}
+
+type TableDropTarget = {
+  status: Status;
+  priority?: TaskPriority;
+  beforeId?: string;
+};
+
+function tableDropTarget(ticket: Ticket, beforeId?: string): TableDropTarget {
+  const beforeTicket = beforeId ? getTicket(beforeId) : null;
+
+  if (beforeTicket) {
+    return {
+      status: beforeTicket.status,
+      priority: beforeTicket.priority,
+      beforeId: beforeTicket.id
+    };
+  }
+
+  const lastTicket = tableTickets().filter((candidate) => candidate.id !== ticket.id).at(-1);
+
+  return {
+    status: lastTicket?.status ?? ticket.status,
+    priority: lastTicket?.priority
+  };
+}
+
+function getTableInsertionBeforeId(tableBody: HTMLElement, pointerY: number) {
+  const rows = Array.from(tableBody.querySelectorAll<HTMLElement>(".task-table-row:not(.is-dragging)"));
+
+  for (const row of rows) {
+    const rect = row.getBoundingClientRect();
+
+    if (pointerY < rect.top + rect.height / 2) {
+      return row.dataset.ticketId;
+    }
+  }
+
+  return undefined;
+}
+
+function updateTableDropIndicator(tableBody: HTMLElement, beforeId?: string) {
+  const currentBefore = document.querySelector<HTMLElement>(".task-table-row.is-table-drop-before");
+  const currentAfter = document.querySelector<HTMLElement>(".task-table-row.is-table-drop-after");
+  const currentEnd = document.querySelector<HTMLElement>("tbody.is-table-drop-at-end");
+
+  if (beforeId) {
+    const nextBefore = findTableRow(beforeId, tableBody);
+
+    if (nextBefore && currentBefore === nextBefore && !currentAfter && !currentEnd) {
+      return;
+    }
+
+    clearTableDropIndicators();
+    nextBefore?.classList.add("is-table-drop-before");
+    return;
+  }
+
+  const nextAfter = findLastTableRow(tableBody);
+
+  if (nextAfter) {
+    if (currentAfter === nextAfter && !currentBefore && !currentEnd) {
+      return;
+    }
+
+    clearTableDropIndicators();
+    nextAfter.classList.add("is-table-drop-after");
+    return;
+  }
+
+  if (currentEnd === tableBody && !currentBefore && !currentAfter) {
+    return;
+  }
+
+  clearTableDropIndicators();
+  tableBody.classList.add("is-table-drop-at-end");
+}
+
+function clearTableDropIndicators() {
+  document
+    .querySelectorAll(".is-table-drop-before, .is-table-drop-after, .is-table-drop-at-end")
+    .forEach((node) => node.classList.remove("is-table-drop-before", "is-table-drop-after", "is-table-drop-at-end"));
+}
+
 function getInsertionBeforeId(list: HTMLElement, pointerY: number) {
   const cards = Array.from(list.querySelectorAll<HTMLElement>(".ticket-card:not(.is-dragging)"));
 
@@ -2509,14 +3180,28 @@ function findTicketCard(ticketId: string, root: ParentNode = document) {
   );
 }
 
+function findTableRow(ticketId: string, root: ParentNode = document) {
+  return (
+    Array.from(root.querySelectorAll<HTMLElement>(".task-table-row")).find(
+      (row) => row.dataset.ticketId === ticketId
+    ) ?? null
+  );
+}
+
 function findLastTicketCard(root: ParentNode = document) {
   const cards = Array.from(root.querySelectorAll<HTMLElement>(".ticket-card:not(.is-dragging)"));
 
   return cards[cards.length - 1] ?? null;
 }
 
+function findLastTableRow(root: ParentNode = document) {
+  const rows = Array.from(root.querySelectorAll<HTMLElement>(".task-table-row:not(.is-dragging)"));
+
+  return rows[rows.length - 1] ?? null;
+}
+
 function focusTicket(ticketId: string) {
-  findTicketCard(ticketId)?.focus();
+  (findTicketCard(ticketId) ?? findTableRow(ticketId))?.focus();
 }
 
 function revealTicketInList(ticketId: string, block: "nearest" | "end" = "nearest") {
@@ -2550,7 +3235,9 @@ function captureScrollSnapshot(): ScrollSnapshot {
     windowX: window.scrollX,
     windowY: window.scrollY,
     elements: Array.from(
-      document.querySelectorAll<HTMLElement>(".project-list, .workspace, .board, .ticket-list[data-status]")
+      document.querySelectorAll<HTMLElement>(
+        ".project-list, .workspace, .board, .task-table-scroll, .ticket-list[data-status]"
+      )
     ).flatMap((element) => {
       const key = scrollSnapshotKey(element);
 
@@ -2605,6 +3292,10 @@ function scrollSnapshotKey(element: HTMLElement) {
     return "board";
   }
 
+  if (element.classList.contains("task-table-scroll")) {
+    return "task-table";
+  }
+
   return null;
 }
 
@@ -2629,6 +3320,10 @@ function scrollSnapshotElement(key: string) {
 
   if (key === "board") {
     return document.querySelector<HTMLElement>(".board");
+  }
+
+  if (key === "task-table") {
+    return document.querySelector<HTMLElement>(".task-table-scroll");
   }
 
   return null;
@@ -2670,6 +3365,124 @@ function updateProjectInWorkspace(workspace: WorkspaceInfo | null, updated: Proj
     ...workspace,
     projects: workspace.projects.map((project) => (project.id === updated.id ? updated : project))
   };
+}
+
+function currentProjectViewMode(): ProjectViewMode {
+  const projectId = state.selectedProjectId;
+
+  return projectId ? state.projectViewModes[projectId] ?? "board" : "board";
+}
+
+function setCurrentProjectViewMode(viewMode: ProjectViewMode) {
+  const projectId = state.selectedProjectId;
+
+  if (!projectId || currentProjectViewMode() === viewMode) {
+    return;
+  }
+
+  state.projectViewModes = {
+    ...state.projectViewModes,
+    [projectId]: viewMode
+  };
+  persistProjectViewModes();
+  render({ preserveScroll: true });
+}
+
+function readProjectViewModes(): Record<string, ProjectViewMode> {
+  try {
+    const raw = localStorage.getItem(projectViewModeStorageKey);
+    const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, ProjectViewMode] =>
+        entry[1] === "board" || entry[1] === "table"
+      )
+    );
+  } catch {
+    return {};
+  }
+}
+
+function persistProjectViewModes() {
+  try {
+    localStorage.setItem(projectViewModeStorageKey, JSON.stringify(state.projectViewModes));
+  } catch {
+    return;
+  }
+}
+
+function currentProjectTableState(): ProjectTableState {
+  const projectId = state.selectedProjectId ?? "__default";
+
+  state.projectTableStates[projectId] ??= {
+    sort: null,
+    filters: {}
+  };
+
+  return state.projectTableStates[projectId];
+}
+
+function tableTickets() {
+  const tableState = currentProjectTableState();
+
+  return sortTicketsForTable(filterTicketsForTable(state.tickets, tableState.filters), tableState.sort);
+}
+
+function canReorderTableRows() {
+  const tableState = currentProjectTableState();
+
+  return !tableState.sort && !hasActiveTableFilters(tableState.filters);
+}
+
+function defaultTableSortIndex(column: TableColumn) {
+  return defaultTableSorts.findIndex((sort) => sort.column === column);
+}
+
+function isTableColumn(value: string | undefined): value is TableColumn {
+  return tableColumnConfigs().some((column) => column.id === value);
+}
+
+function toggleTableSort(column: TableColumn) {
+  const tableState = currentProjectTableState();
+  const currentSort = tableState.sort;
+  const defaultIndex = defaultTableSortIndex(column);
+
+  if (!currentSort && defaultIndex >= 0) {
+    tableState.sort = { column, direction: "desc" };
+  } else if (currentSort?.column === column && currentSort.direction === "asc") {
+    tableState.sort = { column, direction: "desc" };
+  } else if (currentSort?.column === column) {
+    tableState.sort = null;
+  } else {
+    tableState.sort = { column, direction: "asc" };
+  }
+
+  render({ preserveScroll: true });
+}
+
+function setTableFilter(
+  column: TableColumn,
+  value: string,
+  focus: { selectionStart: number | null; selectionEnd: number | null }
+) {
+  const tableState = currentProjectTableState();
+
+  tableState.filters = {
+    ...tableState.filters,
+    [column]: value
+  };
+  render({ preserveScroll: true });
+
+  const input = document.querySelector<HTMLInputElement>(
+    `[data-action="filter-table"][data-table-column="${column}"]`
+  );
+
+  if (input) {
+    input.focus({ preventScroll: true });
+    if (focus.selectionStart !== null && focus.selectionEnd !== null) {
+      input.setSelectionRange(focus.selectionStart, focus.selectionEnd);
+    }
+  }
 }
 
 function ticketsFor(status: Status) {
@@ -2751,8 +3564,55 @@ function setTaskSelectorOpen(selector: HTMLElement, isOpen: boolean) {
   selector.querySelector<HTMLButtonElement>(".status-selector-button")?.setAttribute("aria-expanded", String(isOpen));
 
   if (isOpen) {
+    positionTaskSelectorMenu(selector);
     focusSelectedTaskSelectorOption(selector);
+  } else {
+    resetTaskSelectorMenuPosition(selector);
   }
+}
+
+function positionTaskSelectorMenu(selector: HTMLElement) {
+  if (selector.dataset.selectorOwner !== "table") {
+    return;
+  }
+
+  const trigger = selector.querySelector<HTMLElement>(".status-selector-button");
+  const menu = selector.querySelector<HTMLElement>(".status-menu");
+
+  if (!trigger || !menu) {
+    return;
+  }
+
+  const triggerRect = trigger.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const menuWidth = Math.max(menuRect.width, triggerRect.width);
+  const menuHeight = menuRect.height;
+  const left = Math.max(8, Math.min(triggerRect.left, window.innerWidth - menuWidth - 8));
+  const preferredTop = triggerRect.bottom + 7;
+  const top =
+    preferredTop + menuHeight <= window.innerHeight - 8
+      ? preferredTop
+      : Math.max(8, triggerRect.top - menuHeight - 7);
+
+  menu.style.position = "fixed";
+  menu.style.right = "auto";
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  menu.style.width = `${menuWidth}px`;
+}
+
+function resetTaskSelectorMenuPosition(selector: HTMLElement) {
+  const menu = selector.querySelector<HTMLElement>(".status-menu");
+
+  if (!menu) {
+    return;
+  }
+
+  menu.style.removeProperty("position");
+  menu.style.removeProperty("right");
+  menu.style.removeProperty("left");
+  menu.style.removeProperty("top");
+  menu.style.removeProperty("width");
 }
 
 function chooseDraftSelectorValue(value: string | undefined, source: HTMLElement) {
@@ -2772,6 +3632,92 @@ function chooseDraftSelectorValue(value: string | undefined, source: HTMLElement
   updateTaskSelector(selector, kind, selectorValueForKind(kind));
   closeTaskSelector(selector);
   selector?.querySelector<HTMLButtonElement>(".status-selector-button")?.focus();
+}
+
+async function chooseTableSelectorValue(value: string | undefined, source: HTMLElement) {
+  const selector = source.closest<HTMLElement>("[data-task-selector]");
+  const kind = selector?.dataset.selectorKind as TaskSelectorKind | undefined;
+  const ticketId = selector?.dataset.ticketId;
+
+  if (!selector || !isTaskSelectorKind(kind) || !ticketId || !state.selectedProjectId) {
+    return;
+  }
+
+  const projectId = state.selectedProjectId;
+  const previousTickets = state.tickets;
+  const ticket = getTicket(ticketId);
+  const nextTicket = ticket ? ticketWithSelectorValue(ticket, kind, value ?? "") : null;
+
+  if (!ticket || !nextTicket) {
+    closeTaskSelector(selector);
+    selector.querySelector<HTMLButtonElement>(".status-selector-button")?.focus();
+    return;
+  }
+
+  state.tickets = state.tickets.map((candidate) => (candidate.id === nextTicket.id ? nextTicket : candidate));
+  updateTaskSelector(selector, kind, tableSelectorValueForKind(nextTicket, kind));
+  closeTaskSelector(selector);
+  render({ preserveScroll: true });
+  focusTicket(nextTicket.id);
+
+  try {
+    const updated = await api.updateTicket(
+      projectId,
+      nextTicket.id,
+      nextTicket.title,
+      nextTicket.body,
+      nextTicket.status,
+      nextTicket.priority ?? null,
+      nextTicket.size ?? null
+    );
+    state.tickets = state.tickets.map((candidate) => (candidate.id === updated.id ? updated : candidate)).sort(sortTickets);
+    render({ preserveScroll: true });
+    focusTicket(updated.id);
+  } catch (error) {
+    state.tickets = previousTickets;
+    showError(error, { preserveScroll: true });
+    focusTicket(ticketId);
+  }
+}
+
+function ticketWithSelectorValue(ticket: Ticket, kind: TaskSelectorKind, value: string) {
+  if (kind === "status") {
+    if (!isStatus(value) || ticket.status === value) {
+      return null;
+    }
+
+    return { ...ticket, status: value };
+  }
+
+  if (kind === "priority") {
+    const priority = normalizeDraftPriority(value);
+
+    if (ticket.priority === priority) {
+      return null;
+    }
+
+    return { ...ticket, priority };
+  }
+
+  const size = normalizeDraftSize(value);
+
+  if (ticket.size === size) {
+    return null;
+  }
+
+  return { ...ticket, size };
+}
+
+function tableSelectorValueForKind(ticket: Ticket, kind: TaskSelectorKind) {
+  if (kind === "status") {
+    return ticket.status;
+  }
+
+  if (kind === "priority") {
+    return ticket.priority ?? "";
+  }
+
+  return ticket.size ?? "";
 }
 
 function updateDraftSelectorValue(kind: TaskSelectorKind, value: string) {
@@ -2905,11 +3851,22 @@ function handleTaskSelectorKeydown(event: KeyboardEvent, selector: HTMLElement) 
   if ((event.key === "Enter" || event.key === " ") && document.activeElement?.classList.contains("status-option")) {
     event.preventDefault();
     event.stopPropagation();
-    chooseDraftSelectorValue(
+    chooseTaskSelectorValue(
       (document.activeElement as HTMLElement).dataset.selectorValue,
       document.activeElement as HTMLElement
     );
   }
+}
+
+function chooseTaskSelectorValue(value: string | undefined, source: HTMLElement) {
+  const owner = source.closest<HTMLElement>("[data-task-selector]")?.dataset.selectorOwner;
+
+  if (owner === "table") {
+    void chooseTableSelectorValue(value, source);
+    return;
+  }
+
+  chooseDraftSelectorValue(value, source);
 }
 
 function focusSelectedTaskSelectorOption(selector: HTMLElement) {
@@ -3507,6 +4464,7 @@ function hydrateIcons() {
       Plus,
       RefreshCw,
       Save,
+      Table2,
       Trash2,
       X
     }
