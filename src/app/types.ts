@@ -21,6 +21,10 @@ export type Ticket = {
   createdAt: number;
   updatedAt: number;
   filePath: string;
+  prLink?: string;
+  branch?: string;
+  workspace?: string;
+  assignee?: string;
 };
 
 export type TicketDraft = {

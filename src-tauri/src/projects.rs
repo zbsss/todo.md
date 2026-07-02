@@ -120,6 +120,10 @@ pub(crate) fn seed_project(project_dir: &Path) -> Result<(), String> {
             created_at: now,
             updated_at: now,
             file_path: String::new(),
+            pr_link: None,
+            branch: None,
+            workspace: None,
+            assignee: None,
         };
 
         write_ticket(project_dir, ticket)?;

@@ -88,18 +88,36 @@ pub(crate) fn write_ticket(project_dir: &Path, mut ticket: Ticket) -> Result<Tic
         ticket.id = slugify(&ticket.id);
     }
 
+    ticket.pr_link = ticket
+        .pr_link
+        .take()
+        .and_then(|value| clean_metadata_value(&value));
+    ticket.branch = ticket
+        .branch
+        .take()
+        .and_then(|value| clean_metadata_value(&value));
+    ticket.workspace = ticket
+        .workspace
+        .take()
+        .and_then(|value| clean_metadata_value(&value));
+    ticket.assignee = ticket
+        .assignee
+        .take()
+        .and_then(|value| clean_metadata_value(&value));
+
     let path = ticket_write_path(&tasks_dir, &ticket)?;
     let body = ticket.body.trim_end();
-    let contents = format!(
-        "---\nid: {}\ntitle: {}\nstatus: {}\norder: {}\ncreated_at: {}\nupdated_at: {}\n---\n\n{}\n",
-        ticket.id,
-        ticket.title,
-        ticket.status,
-        ticket.order,
-        ticket.created_at,
-        ticket.updated_at,
-        body
+    let mut contents = format!(
+        "---\nid: {}\ntitle: {}\nstatus: {}\norder: {}\ncreated_at: {}\nupdated_at: {}\n",
+        ticket.id, ticket.title, ticket.status, ticket.order, ticket.created_at, ticket.updated_at
     );
+    append_optional_frontmatter(&mut contents, "pr_link", ticket.pr_link.as_deref());
+    append_optional_frontmatter(&mut contents, "branch", ticket.branch.as_deref());
+    append_optional_frontmatter(&mut contents, "workspace", ticket.workspace.as_deref());
+    append_optional_frontmatter(&mut contents, "assignee", ticket.assignee.as_deref());
+    contents.push_str("---\n\n");
+    contents.push_str(body);
+    contents.push('\n');
 
     fs::write(&path, contents).map_err(|err| err.to_string())?;
     ticket.file_path = path.to_string_lossy().to_string();
@@ -236,7 +254,40 @@ fn parse_ticket_file(path: &Path) -> Result<Ticket, String> {
             .and_then(|value| value.parse().ok())
             .unwrap_or(now),
         file_path: path.to_string_lossy().to_string(),
+        pr_link: frontmatter_value(&frontmatter, &["pr_link", "pr_url", "pull_request"]),
+        branch: frontmatter_value(&frontmatter, &["branch"]),
+        workspace: frontmatter_value(&frontmatter, &["workspace"]),
+        assignee: frontmatter_value(&frontmatter, &["assignee", "codex_thread", "codex_link"]),
     })
+}
+
+fn frontmatter_value(frontmatter: &HashMap<String, String>, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| frontmatter.get(*key))
+        .and_then(|value| clean_metadata_value(value))
+}
+
+fn clean_metadata_value(value: &str) -> Option<String> {
+    let cleaned = normalize_newlines(value)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
+fn append_optional_frontmatter(contents: &mut String, key: &str, value: Option<&str>) {
+    let Some(value) = value else {
+        return;
+    };
+
+    contents.push_str(&format!("{key}: {value}\n"));
 }
 
 fn ticket_write_path(tasks_dir: &Path, ticket: &Ticket) -> Result<PathBuf, String> {
