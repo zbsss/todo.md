@@ -235,7 +235,6 @@ select:focus {
 .ghost-button svg,
 .save-button svg,
 .view-switcher-button svg,
-.table-clear-button svg,
 .project-icon svg,
 .project-drag-icon svg,
 .column-icon svg,
@@ -556,27 +555,6 @@ select:focus {
   font-weight: 780;
 }
 
-.table-clear-button {
-  display: inline-flex;
-  height: 30px;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.72);
-  color: var(--ink);
-  font-size: 0.76rem;
-  font-weight: 800;
-  padding: 0 9px;
-}
-
-.table-clear-button:hover,
-.table-clear-button:focus-visible {
-  border-color: rgba(35, 108, 90, 0.35);
-  background: #ffffff;
-  outline: none;
-}
-
 .task-table-scroll {
   min-height: 0;
   overflow: auto;
@@ -615,12 +593,6 @@ select:focus {
 
 .task-table thead tr:first-child th {
   top: 0;
-}
-
-.table-filter-row th {
-  top: 42px;
-  z-index: 4;
-  padding: 6px 8px 8px;
 }
 
 .task-table-heading {
@@ -709,14 +681,6 @@ select:focus {
   font-weight: 900;
 }
 
-.task-table-filter input {
-  height: 32px;
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.76);
-  font-size: 0.78rem;
-  padding: 0 9px;
-}
-
 .task-table-row {
   position: relative;
   background: rgba(255, 253, 249, 0.82);
@@ -733,10 +697,6 @@ select:focus {
   outline: none;
 }
 
-.task-table-row.is-dragging {
-  opacity: 0.42;
-}
-
 .task-table-cell {
   height: 48px;
   min-width: 0;
@@ -744,24 +704,7 @@ select:focus {
 }
 
 .task-table-title-cell {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  gap: 8px;
-  align-items: center;
-}
-
-.table-drag-handle {
-  display: grid;
-  width: 20px;
-  height: 30px;
-  place-items: center;
-  color: #9a958b;
-  cursor: grab;
-}
-
-.table-drag-handle.disabled {
-  cursor: default;
-  opacity: 0.35;
+  min-width: 0;
 }
 
 .table-title-button {
@@ -827,9 +770,15 @@ select:focus {
   max-width: 84px;
 }
 
+.task-table-status-cell,
 .task-table-priority-cell,
 .task-table-size-cell {
   text-align: center;
+}
+
+.task-table-status-cell .status-selector {
+  width: min(100%, 132px);
+  margin: 0 auto;
 }
 
 .task-table-priority-cell .status-selector,
@@ -853,6 +802,7 @@ select:focus {
 }
 
 .table-link-label {
+  gap: 5px;
   border: 1px solid rgba(35, 108, 90, 0.22);
   background: #edf6f1;
   color: var(--accent-strong);
@@ -867,6 +817,18 @@ select:focus {
   outline: none;
 }
 
+.table-link-prefix {
+  color: var(--muted);
+  font-weight: 780;
+}
+
+.table-link-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .table-muted {
   color: #9a958b;
   font-size: 0.76rem;
@@ -874,37 +836,6 @@ select:focus {
 
 .task-table-empty-row td {
   padding: 18px;
-}
-
-.task-table-row.is-table-drop-before::before,
-.task-table-row.is-table-drop-after::after,
-tbody.is-table-drop-at-end::after {
-  position: absolute;
-  right: 8px;
-  left: 8px;
-  z-index: 6;
-  display: block;
-  height: 3px;
-  border-radius: 999px;
-  background: var(--accent);
-  content: "";
-  pointer-events: none;
-}
-
-.task-table-row.is-table-drop-before::before {
-  top: -2px;
-}
-
-.task-table-row.is-table-drop-after::after {
-  bottom: -2px;
-}
-
-tbody.is-table-drop-at-end {
-  position: relative;
-}
-
-tbody.is-table-drop-at-end::after {
-  bottom: 6px;
 }
 
 .table-summary-skeleton {

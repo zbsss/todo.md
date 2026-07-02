@@ -74,11 +74,8 @@ import {
 import { insertTicket, rankForInsertion, sortTickets } from "./tickets/ordering";
 import {
   defaultTableSorts,
-  filterTicketsForTable,
-  hasActiveTableFilters,
   sortTicketsForTable,
   type TableColumn,
-  type TableFilters,
   type TableSort
 } from "./tickets/table";
 import "./styles.css";
@@ -110,7 +107,6 @@ type ProjectViewMode = "board" | "table";
 
 type ProjectTableState = {
   sort: TableSort | null;
-  filters: TableFilters;
 };
 
 const state: {
@@ -584,27 +580,17 @@ function renderColumn(column: { id: Status; label: string; icon: string }) {
 function renderTableView() {
   const tickets = tableTickets();
   const tableState = currentProjectTableState();
-  const hasFilters = hasActiveTableFilters(tableState.filters);
 
   return `
     <div class="table-view" aria-label="Task table">
       <div class="table-summary">
         <span>${tickets.length} ${tickets.length === 1 ? "task" : "tasks"}</span>
-        ${hasFilters ? `
-          <button class="table-clear-button" data-action="clear-table-filters" title="Clear filters">
-            ${icon("x")}
-            <span>Clear</span>
-          </button>
-        ` : ""}
       </div>
       <div class="task-table-scroll">
         <table class="task-table">
           <thead>
             <tr>
               ${tableColumnConfigs().map((column) => renderTableHeaderCell(column, tableState.sort)).join("")}
-            </tr>
-            <tr class="table-filter-row">
-              ${tableColumnConfigs().map((column) => renderTableFilterCell(column, tableState.filters)).join("")}
             </tr>
           </thead>
           <tbody>
@@ -620,9 +606,9 @@ function tableColumnConfigs(): Array<{ id: TableColumn; label: string }> {
   return [
     { id: "title", label: "Title" },
     { id: "status", label: "Status" },
-    { id: "assignee", label: "Assignee" },
     { id: "priority", label: "Priority" },
     { id: "size", label: "Size" },
+    { id: "assignee", label: "Assignee" },
     { id: "pr", label: "PR" }
   ];
 }
@@ -663,35 +649,24 @@ function renderTableSortIndicator(isActive: boolean, direction: "asc" | "desc", 
   `;
 }
 
-function renderTableFilterCell(column: { id: TableColumn; label: string }, filters: TableFilters) {
-  return `
-    <th scope="col" class="task-table-filter task-table-filter-${column.id}">
-      <input
-        data-action="filter-table"
-        data-table-column="${column.id}"
-        aria-label="Filter ${escapeAttr(column.label)}"
-        placeholder="Filter"
-        value="${escapeAttr(filters[column.id] ?? "")}"
-      />
-    </th>
-  `;
-}
-
 function renderTableRow(ticket: Ticket) {
-  const canReorder = canReorderTableRows();
+  const displayTitle = titleDisplayValue(ticket.title);
 
   return `
     <tr
       class="task-table-row"
       data-ticket-id="${escapeAttr(ticket.id)}"
-      draggable="${canReorder}"
       tabindex="0"
       aria-label="${escapeAttr(ticketCardAriaLabel(ticket))}"
-      aria-keyshortcuts="Enter ArrowUp ArrowDown"
+      aria-keyshortcuts="Enter"
     >
       <td class="task-table-cell task-table-title-cell">
-        <span class="table-drag-handle ${canReorder ? "" : "disabled"}" title="Drag to reorder">${icon("grip-vertical")}</span>
-        <button type="button" class="table-title-button" data-action="open-table-ticket">
+        <button
+          type="button"
+          class="table-title-button"
+          data-action="open-table-ticket"
+          title="${escapeAttr(displayTitle)}"
+        >
           ${renderTicketTitle(ticket.title)}
         </button>
       </td>
@@ -701,9 +676,6 @@ function renderTableRow(ticket: Ticket) {
           ticketId: ticket.id,
           className: "table-selector"
         })}
-      </td>
-      <td class="task-table-cell task-table-assignee-cell">
-        ${renderTableLinkCell(ticket.assignee, "assignee")}
       </td>
       <td class="task-table-cell task-table-priority-cell">
         ${renderTaskSelector("priority", ticket.priority, {
@@ -718,6 +690,9 @@ function renderTableRow(ticket: Ticket) {
           ticketId: ticket.id,
           className: "table-selector table-selector-compact"
         })}
+      </td>
+      <td class="task-table-cell task-table-assignee-cell">
+        ${renderTableLinkCell(ticket.assignee, "assignee")}
       </td>
       <td class="task-table-cell task-table-pr-cell">
         ${renderTableLinkCell(ticket.prLink, "pr")}
@@ -739,13 +714,24 @@ function renderTableLinkCell(value: string | undefined, kind: "assignee" | "pr")
   const label = kind === "pr" ? formatPullRequestLabel(metadata) : formatAssigneeLabel(metadata);
 
   if (!href) {
-    return `<span class="table-link-label">${escapeHtml(label)}</span>`;
+    return `<span class="table-link-label">${renderTableLinkLabel(kind, label)}</span>`;
   }
 
   return `
     <a class="table-link-label is-link" href="${escapeAttr(href)}" rel="noreferrer" data-table-link>
-      ${escapeHtml(label)}
+      ${renderTableLinkLabel(kind, label)}
     </a>
+  `;
+}
+
+function renderTableLinkLabel(kind: "assignee" | "pr", label: string) {
+  if (kind !== "assignee") {
+    return escapeHtml(label);
+  }
+
+  return `
+    <span class="table-link-prefix">Codex</span>
+    <span class="table-link-text">${escapeHtml(label)}</span>
   `;
 }
 
@@ -754,7 +740,7 @@ function renderEmptyTableRow() {
     <tr class="task-table-empty-row">
       <td colspan="${tableColumnConfigs().length}">
         <div class="empty-board">
-          <h3>No matching tasks</h3>
+          <h3>No tasks</h3>
         </div>
       </td>
     </tr>
@@ -1229,25 +1215,6 @@ function bindViewEvents() {
     });
   });
 
-  document.querySelectorAll<HTMLInputElement>('[data-action="filter-table"]').forEach((input) => {
-    input.addEventListener("input", () => {
-      const column = input.dataset.tableColumn;
-
-      if (!isTableColumn(column)) {
-        return;
-      }
-
-      const selectionStart = input.selectionStart;
-      const selectionEnd = input.selectionEnd;
-      setTableFilter(column, input.value, { selectionStart, selectionEnd });
-    });
-  });
-
-  document.querySelector<HTMLButtonElement>('[data-action="clear-table-filters"]')?.addEventListener("click", () => {
-    const tableState = currentProjectTableState();
-    tableState.filters = {};
-    render({ preserveScroll: true });
-  });
 }
 
 function bindProjectEvents() {
@@ -1967,7 +1934,6 @@ function bindTicketEvents() {
 
 function bindTableTicketEvents() {
   const table = document.querySelector<HTMLElement>(".task-table");
-  const tableBody = table?.querySelector<HTMLElement>("tbody");
 
   table?.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
@@ -2025,99 +1991,7 @@ function bindTableTicketEvents() {
       if (event.key === "Enter") {
         openEditor(ticketId);
       }
-
-      if ((event.key === "ArrowUp" || event.key === "ArrowDown") && canReorderTableRows()) {
-        event.preventDefault();
-        void moveFocusedTableTicket(ticketId, event.key === "ArrowUp" ? "up" : "down");
-      }
     });
-
-    row.addEventListener("dragstart", (event) => {
-      const ticketId = row.dataset.ticketId;
-
-      if (!canReorderTableRows() || !ticketId || !event.dataTransfer) {
-        event.preventDefault();
-        return;
-      }
-
-      state.draggingId = ticketId;
-      event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData(ticketDragType, ticketId);
-      row.classList.add("is-dragging");
-      closeTicketMenu({ shouldRender: false });
-    });
-
-    row.addEventListener("dragover", (event) => {
-      if (!state.draggingId || !canReorderTableRows()) {
-        return;
-      }
-
-      event.preventDefault();
-      if (event.dataTransfer) {
-        event.dataTransfer.dropEffect = "move";
-      }
-
-      const body = row.closest<HTMLElement>("tbody");
-
-      if (body) {
-        updateTableDropIndicator(body, getTableInsertionBeforeId(body, event.clientY));
-      }
-    });
-
-    row.addEventListener("drop", async (event) => {
-      if (!canReorderTableRows()) {
-        return;
-      }
-
-      event.preventDefault();
-      event.stopPropagation();
-      const body = row.closest<HTMLElement>("tbody");
-      const ticketId = event.dataTransfer?.getData(ticketDragType) || state.draggingId;
-      const beforeId = body ? getTableInsertionBeforeId(body, event.clientY) : undefined;
-
-      clearTableDropIndicators();
-
-      if (ticketId) {
-        await moveTableTicket(ticketId, beforeId);
-      }
-    });
-
-    row.addEventListener("dragend", () => {
-      state.draggingId = null;
-      clearTableDropIndicators();
-      document
-        .querySelectorAll(".task-table-row.is-dragging")
-        .forEach((node) => node.classList.remove("is-dragging"));
-    });
-  });
-
-  tableBody?.addEventListener("dragover", (event) => {
-    if (!state.draggingId || !canReorderTableRows()) {
-      return;
-    }
-
-    event.preventDefault();
-    if (event.dataTransfer) {
-      event.dataTransfer.dropEffect = "move";
-    }
-
-    updateTableDropIndicator(tableBody, getTableInsertionBeforeId(tableBody, event.clientY));
-  });
-
-  tableBody?.addEventListener("drop", async (event) => {
-    if (!canReorderTableRows()) {
-      return;
-    }
-
-    event.preventDefault();
-    const ticketId = event.dataTransfer?.getData(ticketDragType) || state.draggingId;
-    const beforeId = getTableInsertionBeforeId(tableBody, event.clientY);
-
-    clearTableDropIndicators();
-
-    if (ticketId) {
-      await moveTableTicket(ticketId, beforeId);
-    }
   });
 
   document.querySelector<HTMLElement>(".task-table-scroll")?.addEventListener("scroll", () => {
@@ -2802,183 +2676,6 @@ async function moveFocusedTicket(ticketId: string, direction: KeyboardMoveDirect
   focusTicket(ticketId);
 }
 
-async function moveTableTicket(ticketId: string, beforeId?: string) {
-  if (!state.selectedProjectId) {
-    return;
-  }
-
-  const ticket = getTicket(ticketId);
-
-  if (!ticket || beforeId === ticketId) {
-    return;
-  }
-
-  const projectId = state.selectedProjectId;
-  const target = tableDropTarget(ticket, beforeId);
-  const movedTicket = {
-    ...ticket,
-    status: target.status,
-    priority: target.priority
-  };
-  const remaining = state.tickets.filter((candidate) => candidate.id !== ticketId);
-  const insertedTickets = insertTicket(remaining, movedTicket, target.status, target.beforeId);
-  const rank = rankForInsertion(insertedTickets, ticketId, target.status);
-
-  if (ticket.status === target.status && ticket.priority === target.priority && ticket.rank === rank) {
-    return;
-  }
-
-  const previousTickets = state.tickets;
-  const nextTicket = { ...movedTicket, rank };
-  const nextTickets = insertTicket(remaining, nextTicket, target.status, target.beforeId).map((candidate) => ({
-    ...candidate
-  }));
-
-  state.tickets = nextTickets.sort(sortTickets);
-  render({ preserveScroll: true });
-  focusTicket(ticketId);
-
-  try {
-    let updatedMetadata: Ticket | null = null;
-
-    if (ticket.status !== target.status || ticket.priority !== target.priority) {
-      updatedMetadata = await api.updateTicket(
-        projectId,
-        ticket.id,
-        ticket.title,
-        ticket.body,
-        target.status,
-        target.priority ?? null,
-        ticket.size ?? null
-      );
-    }
-
-    if (ticket.status !== target.status || ticket.rank !== rank) {
-      state.tickets = await api.reorderTickets(projectId, [{ id: ticketId, status: target.status, rank }]);
-    } else if (updatedMetadata) {
-      state.tickets = state.tickets.map((candidate) =>
-        candidate.id === updatedMetadata.id ? updatedMetadata : candidate
-      );
-    }
-
-    render({ preserveScroll: true });
-    focusTicket(ticketId);
-  } catch (error) {
-    showError(error, { preserveScroll: true });
-
-    try {
-      await loadTickets(projectId);
-    } catch {
-      state.tickets = previousTickets;
-    }
-
-    render({ preserveScroll: true });
-    focusTicket(ticketId);
-  }
-}
-
-async function moveFocusedTableTicket(ticketId: string, direction: KeyboardMoveDirection) {
-  const tickets = tableTickets();
-  const index = tickets.findIndex((ticket) => ticket.id === ticketId);
-
-  if (index === -1) {
-    return;
-  }
-
-  if (direction === "up" && index === 0) {
-    return;
-  }
-
-  if (direction === "down" && index >= tickets.length - 1) {
-    return;
-  }
-
-  const beforeId = direction === "up" ? tickets[index - 1]?.id : tickets[index + 2]?.id;
-  await moveTableTicket(ticketId, beforeId);
-}
-
-type TableDropTarget = {
-  status: Status;
-  priority?: TaskPriority;
-  beforeId?: string;
-};
-
-function tableDropTarget(ticket: Ticket, beforeId?: string): TableDropTarget {
-  const beforeTicket = beforeId ? getTicket(beforeId) : null;
-
-  if (beforeTicket) {
-    return {
-      status: beforeTicket.status,
-      priority: beforeTicket.priority,
-      beforeId: beforeTicket.id
-    };
-  }
-
-  const lastTicket = tableTickets().filter((candidate) => candidate.id !== ticket.id).at(-1);
-
-  return {
-    status: lastTicket?.status ?? ticket.status,
-    priority: lastTicket?.priority
-  };
-}
-
-function getTableInsertionBeforeId(tableBody: HTMLElement, pointerY: number) {
-  const rows = Array.from(tableBody.querySelectorAll<HTMLElement>(".task-table-row:not(.is-dragging)"));
-
-  for (const row of rows) {
-    const rect = row.getBoundingClientRect();
-
-    if (pointerY < rect.top + rect.height / 2) {
-      return row.dataset.ticketId;
-    }
-  }
-
-  return undefined;
-}
-
-function updateTableDropIndicator(tableBody: HTMLElement, beforeId?: string) {
-  const currentBefore = document.querySelector<HTMLElement>(".task-table-row.is-table-drop-before");
-  const currentAfter = document.querySelector<HTMLElement>(".task-table-row.is-table-drop-after");
-  const currentEnd = document.querySelector<HTMLElement>("tbody.is-table-drop-at-end");
-
-  if (beforeId) {
-    const nextBefore = findTableRow(beforeId, tableBody);
-
-    if (nextBefore && currentBefore === nextBefore && !currentAfter && !currentEnd) {
-      return;
-    }
-
-    clearTableDropIndicators();
-    nextBefore?.classList.add("is-table-drop-before");
-    return;
-  }
-
-  const nextAfter = findLastTableRow(tableBody);
-
-  if (nextAfter) {
-    if (currentAfter === nextAfter && !currentBefore && !currentEnd) {
-      return;
-    }
-
-    clearTableDropIndicators();
-    nextAfter.classList.add("is-table-drop-after");
-    return;
-  }
-
-  if (currentEnd === tableBody && !currentBefore && !currentAfter) {
-    return;
-  }
-
-  clearTableDropIndicators();
-  tableBody.classList.add("is-table-drop-at-end");
-}
-
-function clearTableDropIndicators() {
-  document
-    .querySelectorAll(".is-table-drop-before, .is-table-drop-after, .is-table-drop-at-end")
-    .forEach((node) => node.classList.remove("is-table-drop-before", "is-table-drop-after", "is-table-drop-at-end"));
-}
-
 function getInsertionBeforeId(list: HTMLElement, pointerY: number) {
   const cards = Array.from(list.querySelectorAll<HTMLElement>(".ticket-card:not(.is-dragging)"));
 
@@ -3192,12 +2889,6 @@ function findLastTicketCard(root: ParentNode = document) {
   const cards = Array.from(root.querySelectorAll<HTMLElement>(".ticket-card:not(.is-dragging)"));
 
   return cards[cards.length - 1] ?? null;
-}
-
-function findLastTableRow(root: ParentNode = document) {
-  const rows = Array.from(root.querySelectorAll<HTMLElement>(".task-table-row:not(.is-dragging)"));
-
-  return rows[rows.length - 1] ?? null;
 }
 
 function focusTicket(ticketId: string) {
@@ -3415,8 +3106,7 @@ function currentProjectTableState(): ProjectTableState {
   const projectId = state.selectedProjectId ?? "__default";
 
   state.projectTableStates[projectId] ??= {
-    sort: null,
-    filters: {}
+    sort: null
   };
 
   return state.projectTableStates[projectId];
@@ -3425,13 +3115,7 @@ function currentProjectTableState(): ProjectTableState {
 function tableTickets() {
   const tableState = currentProjectTableState();
 
-  return sortTicketsForTable(filterTicketsForTable(state.tickets, tableState.filters), tableState.sort);
-}
-
-function canReorderTableRows() {
-  const tableState = currentProjectTableState();
-
-  return !tableState.sort && !hasActiveTableFilters(tableState.filters);
+  return sortTicketsForTable(state.tickets, tableState.sort);
 }
 
 function defaultTableSortIndex(column: TableColumn) {
@@ -3458,31 +3142,6 @@ function toggleTableSort(column: TableColumn) {
   }
 
   render({ preserveScroll: true });
-}
-
-function setTableFilter(
-  column: TableColumn,
-  value: string,
-  focus: { selectionStart: number | null; selectionEnd: number | null }
-) {
-  const tableState = currentProjectTableState();
-
-  tableState.filters = {
-    ...tableState.filters,
-    [column]: value
-  };
-  render({ preserveScroll: true });
-
-  const input = document.querySelector<HTMLInputElement>(
-    `[data-action="filter-table"][data-table-column="${column}"]`
-  );
-
-  if (input) {
-    input.focus({ preventScroll: true });
-    if (focus.selectionStart !== null && focus.selectionEnd !== null) {
-      input.setSelectionRange(focus.selectionStart, focus.selectionEnd);
-    }
-  }
 }
 
 function ticketsFor(status: Status) {

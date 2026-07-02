@@ -167,23 +167,6 @@ test("sortTicketsForTable sorts by an explicit table column", () => {
   );
 });
 
-test("filterTicketsForTable matches column values and labels", () => {
-  const tickets = [
-    ticket({ id: "with-pr", status: "todo", prLink: "https://github.com/zbsss/todo.md/pull/178" }),
-    ticket({ id: "doing-task", status: "doing", assignee: "codex://threads/019f239d-dd6d-7451-856c-3847cadaf912" }),
-    ticket({ id: "done-task", status: "done" })
-  ];
-
-  assert.deepEqual(
-    table.filterTicketsForTable(tickets, { status: "doing", assignee: "019f239d" }).map((item) => item.id),
-    ["doing-task"]
-  );
-  assert.deepEqual(table.filterTicketsForTable(tickets, { pr: "#178" }).map((item) => item.id), ["with-pr"]);
-  assert.deepEqual(table.filterTicketsForTable(tickets, { assignee: "empty", pr: "empty" }).map((item) => item.id), [
-    "done-task"
-  ]);
-});
-
 test("renderMarkdown escapes HTML and protects inline code from markdown formatting", () => {
   const html = markdown.renderMarkdown('Hello <script>alert("x")</script> and `*literal*`');
 
