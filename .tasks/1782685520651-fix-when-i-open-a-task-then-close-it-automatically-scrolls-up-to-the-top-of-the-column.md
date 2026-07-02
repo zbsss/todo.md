@@ -1,10 +1,10 @@
 ---
 id: 1782685520651-fix-when-i-open-a-task-then-close-it-automatically-scrolls-up-to-the-top-of-the-column
 title: Fix: when i open a task, then close, it automatically scrolls up to the top of the column
-status: todo
+status: done
 order: 15000
 created_at: 1782685520652
-updated_at: 1782954245213
+updated_at: 1782959101000
 ---
 
 It should remain in the same position i was when i opened that task.

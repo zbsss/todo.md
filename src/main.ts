@@ -96,6 +96,10 @@ type MarkdownRenderOptions = {
 
 type RenderOptions = {
   preserveScroll?: boolean;
+  revealTicket?: {
+    id: string;
+    block?: "nearest" | "end";
+  };
 };
 
 type SaveDraftOptions = {
@@ -295,6 +299,10 @@ function render(options: RenderOptions = {}) {
   hydrateIcons();
   bindEvents();
   restoreScrollSnapshot(scrollSnapshot);
+
+  if (options.revealTicket) {
+    revealTicketInList(options.revealTicket.id, options.revealTicket.block ?? "nearest");
+  }
 }
 
 function renderProjects(projects: ProjectSummary[]) {
@@ -1183,7 +1191,7 @@ function bindTicketEvents() {
           state.tickets.push(ticket);
           state.workspace = updateTicketCount(state.workspace, state.selectedProjectId, 1);
           input.value = "";
-          render();
+          render({ preserveScroll: true, revealTicket: { id: ticket.id, block: "end" } });
         } catch (error) {
           showError(error);
         }
@@ -1509,8 +1517,8 @@ function openEditor(ticketId: string) {
     pastedImages: []
   };
   state.draftSaveError = null;
-  render();
-  document.querySelector<HTMLButtonElement>(".title-display")?.focus();
+  render({ preserveScroll: true });
+  document.querySelector<HTMLButtonElement>(".title-display")?.focus({ preventScroll: true });
 }
 
 function closeEditor() {
@@ -1518,7 +1526,7 @@ function closeEditor() {
   state.selectedTicketId = null;
   state.draft = null;
   state.draftSaveError = null;
-  render();
+  render({ preserveScroll: true });
 }
 
 async function requestCloseEditor() {
@@ -2119,6 +2127,32 @@ function findLastTicketCard(root: ParentNode = document) {
 
 function focusTicket(ticketId: string) {
   findTicketCard(ticketId)?.focus();
+}
+
+function revealTicketInList(ticketId: string, block: "nearest" | "end" = "nearest") {
+  const card = findTicketCard(ticketId);
+  const list = card?.closest<HTMLElement>(".ticket-list");
+
+  if (!card || !list) {
+    return;
+  }
+
+  const listRect = list.getBoundingClientRect();
+  const cardRect = card.getBoundingClientRect();
+  const cardTop = cardRect.top - listRect.top + list.scrollTop;
+  const cardBottom = cardTop + cardRect.height;
+  const visibleTop = list.scrollTop;
+  const visibleBottom = visibleTop + list.clientHeight;
+  const maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
+  let nextScrollTop = visibleTop;
+
+  if (block === "end" || cardBottom > visibleBottom) {
+    nextScrollTop = cardBottom - list.clientHeight;
+  } else if (cardTop < visibleTop) {
+    nextScrollTop = cardTop;
+  }
+
+  list.scrollTop = Math.min(maxScrollTop, Math.max(0, nextScrollTop));
 }
 
 function captureScrollSnapshot(): ScrollSnapshot {
