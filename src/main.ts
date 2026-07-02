@@ -51,6 +51,8 @@ import {
 import "./styles.css";
 
 type Status = "todo" | "doing" | "done";
+type TicketPriority = "" | "P0" | "P1" | "P2" | "P3" | "P4";
+type TicketSize = "" | "XS" | "S" | "M" | "L" | "XL";
 
 type ProjectSummary = {
   id: string;
@@ -70,6 +72,9 @@ type Ticket = {
   body: string;
   status: Status;
   order: number;
+  priority: TicketPriority;
+  size: TicketSize;
+  tags: string[];
   createdAt: number;
   updatedAt: number;
   filePath: string;
@@ -80,6 +85,9 @@ type TicketDraft = {
   title: string;
   body: string;
   status: Status;
+  priority: TicketPriority;
+  size: TicketSize;
+  tags: string[];
   pastedImages: string[];
 };
 
@@ -128,6 +136,22 @@ const columns: Array<{ id: Status; label: string; icon: string }> = [
   { id: "todo", label: "To do", icon: "list-todo" },
   { id: "doing", label: "Doing", icon: "loader-circle" },
   { id: "done", label: "Done", icon: "circle-check" }
+];
+const priorityOptions: Array<{ value: TicketPriority; label: string }> = [
+  { value: "", label: "No priority" },
+  { value: "P0", label: "P0" },
+  { value: "P1", label: "P1" },
+  { value: "P2", label: "P2" },
+  { value: "P3", label: "P3" },
+  { value: "P4", label: "P4" }
+];
+const sizeOptions: Array<{ value: TicketSize; label: string }> = [
+  { value: "", label: "No size" },
+  { value: "XS", label: "XS" },
+  { value: "S", label: "S" },
+  { value: "M", label: "M" },
+  { value: "L", label: "L" },
+  { value: "XL", label: "XL" }
 ];
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -236,8 +260,29 @@ async function loadWorkspace() {
 
 async function loadTickets(projectId: string) {
   state.error = null;
-  state.tickets = await api.listTickets(projectId);
+  state.tickets = (await api.listTickets(projectId)).map(normalizeTicket);
   state.tickets.sort(sortTickets);
+}
+
+function normalizeTicket(ticket: Ticket): Ticket {
+  return {
+    ...ticket,
+    priority: normalizePriority(ticket.priority),
+    size: normalizeSize(ticket.size),
+    tags: normalizeTags(ticket.tags ?? [])
+  };
+}
+
+function normalizePriority(priority: unknown): TicketPriority {
+  const value = typeof priority === "string" ? priority.trim().toUpperCase() : "";
+
+  return isPriority(value) ? value : "";
+}
+
+function normalizeSize(size: unknown): TicketSize {
+  const value = typeof size === "string" ? size.trim().toUpperCase() : "";
+
+  return isSize(value) ? value : "";
 }
 
 function render(options: RenderOptions = {}) {
@@ -535,6 +580,8 @@ function renderTicketCard(ticket: Ticket) {
     skipImages: true,
     projectPath: getCurrentProject()?.path
   });
+  const metadata = renderTicketCardMetadata(ticket);
+  const shouldShowSummary = renderedBody && shouldRenderCardSummary(ticket);
 
   return `
     <article
@@ -549,9 +596,32 @@ function renderTicketCard(ticket: Ticket) {
         <h4>${renderTicketTitle(ticket.title)}</h4>
         <span class="drag-handle" title="Drag to reorder">${icon("grip-vertical")}</span>
       </div>
-      ${renderedBody ? `<div class="markdown card-markdown">${renderedBody}</div>` : ""}
+      ${metadata}
+      ${shouldShowSummary ? `<div class="markdown card-markdown">${renderedBody}</div>` : ""}
     </article>
   `;
+}
+
+function renderTicketCardMetadata(ticket: Ticket) {
+  const chips: string[] = [];
+
+  if (ticket.priority) {
+    chips.push(`<span class="metadata-chip priority-chip priority-chip-${escapeAttr(ticket.priority.toLowerCase())}">${escapeHtml(ticket.priority)}</span>`);
+  }
+
+  chips.push(...ticket.tags.map((tag) => `<span class="metadata-chip tag-chip">${escapeHtml(tag)}</span>`));
+
+  if (!chips.length) {
+    return "";
+  }
+
+  return `<div class="ticket-card-metadata" aria-label="Ticket metadata">${chips.join("")}</div>`;
+}
+
+function shouldRenderCardSummary(ticket: Ticket) {
+  const metadataTextLength = (ticket.priority ? ticket.priority.length : 0) + ticket.tags.join("").length;
+
+  return ticket.tags.length + (ticket.priority ? 1 : 0) <= 2 && metadataTextLength <= 18;
 }
 
 function renderEditor() {
@@ -566,6 +636,8 @@ function renderEditor() {
   }
 
   const displayTitle = titleDisplayValue(state.draft.title);
+  const createdAt = formatTimestamp(ticket.createdAt);
+  const updatedAt = formatTimestamp(ticket.updatedAt);
 
   return `
     <div class="modal-backdrop" data-action="close-editor">
@@ -580,6 +652,10 @@ function renderEditor() {
               data-action="edit-title"
               aria-label="Edit title: ${escapeAttr(displayTitle)}"
             >${renderTicketTitle(displayTitle)}</button>
+            <div class="ticket-timestamps">
+              <span>Created ${escapeHtml(createdAt)}</span>
+              <span>Updated ${escapeHtml(updatedAt)}</span>
+            </div>
             <input
               class="title-input"
               name="title"
@@ -600,6 +676,24 @@ function renderEditor() {
         </header>
 
         <div class="editor-body">
+          <div class="metadata-editor" aria-label="Ticket metadata">
+            <label class="metadata-field">
+              <span>Priority</span>
+              <select name="priority" aria-label="Priority">
+                ${renderSelectOptions(priorityOptions, state.draft.priority)}
+              </select>
+            </label>
+            <label class="metadata-field">
+              <span>Size</span>
+              <select name="size" aria-label="Size">
+                ${renderSelectOptions(sizeOptions, state.draft.size)}
+              </select>
+            </label>
+            <label class="metadata-field tags-field">
+              <span>Tags</span>
+              <input name="tags" value="${escapeAttr(state.draft.tags.join(", "))}" aria-label="Tags" />
+            </label>
+          </div>
           <div class="markdown-editor-shell">
             <div class="markdown-editor" data-editor-root></div>
           </div>
@@ -657,6 +751,31 @@ function renderStatusSelector(status: Status) {
       </div>
     </div>
   `;
+}
+
+function renderSelectOptions<T extends string>(options: Array<{ value: T; label: string }>, selectedValue: T) {
+  return options
+    .map(
+      (option) => `
+        <option value="${escapeAttr(option.value)}" ${option.value === selectedValue ? "selected" : ""}>
+          ${escapeHtml(option.label)}
+        </option>
+      `
+    )
+    .join("");
+}
+
+function formatTimestamp(value: number) {
+  const date = new Date(value);
+
+  if (!Number.isFinite(value) || Number.isNaN(date.getTime())) {
+    return "Unknown";
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "medium"
+  }).format(date);
 }
 
 function bindEvents() {
@@ -1191,7 +1310,7 @@ function bindTicketEvents() {
         }
 
         try {
-          const ticket = await api.createTicket(state.selectedProjectId, status, title);
+          const ticket = normalizeTicket(await api.createTicket(state.selectedProjectId, status, title));
           state.tickets.push(ticket);
           state.workspace = updateTicketCount(state.workspace, state.selectedProjectId, 1);
           input.value = "";
@@ -1356,6 +1475,9 @@ function bindEditorEvents() {
   const backdrop = document.querySelector<HTMLElement>(".modal-backdrop");
   const panel = document.querySelector<HTMLElement>(".editor-panel");
   const titleInput = document.querySelector<HTMLInputElement>('.editor-panel input[name="title"]');
+  const prioritySelect = document.querySelector<HTMLSelectElement>('.editor-panel select[name="priority"]');
+  const sizeSelect = document.querySelector<HTMLSelectElement>('.editor-panel select[name="size"]');
+  const tagsInput = document.querySelector<HTMLInputElement>('.editor-panel input[name="tags"]');
   const editorRoot = document.querySelector<HTMLElement>("[data-editor-root]");
   const statusSelector = document.querySelector<HTMLElement>("[data-status-selector]");
 
@@ -1430,6 +1552,27 @@ function bindEditorEvents() {
   titleInput?.addEventListener("input", () => {
     if (state.draft) {
       state.draft.title = titleInput.value;
+      scheduleDraftSave();
+    }
+  });
+
+  prioritySelect?.addEventListener("change", () => {
+    if (state.draft) {
+      state.draft.priority = normalizePriority(prioritySelect.value);
+      scheduleDraftSave();
+    }
+  });
+
+  sizeSelect?.addEventListener("change", () => {
+    if (state.draft) {
+      state.draft.size = normalizeSize(sizeSelect.value);
+      scheduleDraftSave();
+    }
+  });
+
+  tagsInput?.addEventListener("input", () => {
+    if (state.draft) {
+      state.draft.tags = parseTagInput(tagsInput.value);
       scheduleDraftSave();
     }
   });
@@ -1650,6 +1793,9 @@ function openEditor(ticketId: string) {
     title: ticket.title,
     body: ticket.body,
     status: ticket.status,
+    priority: ticket.priority,
+    size: ticket.size,
+    tags: [...ticket.tags],
     pastedImages: []
   };
   state.draftSaveError = null;
@@ -1698,6 +1844,9 @@ function hasUnsavedDraft() {
     ticket.title !== normalizeDraftTitle(state.draft.title) ||
     ticket.body !== normalizeDraftBody(state.draft.body) ||
     ticket.status !== state.draft.status ||
+    ticket.priority !== state.draft.priority ||
+    ticket.size !== state.draft.size ||
+    !arraysEqual(ticket.tags, state.draft.tags) ||
     state.draft.pastedImages.length > 0
   );
 }
@@ -1708,6 +1857,40 @@ function normalizeDraftTitle(title: string) {
 
 function normalizeDraftBody(body: string) {
   return body.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trimEnd();
+}
+
+function parseTagInput(value: string) {
+  return normalizeTags(value.split(","));
+}
+
+function normalizeTags(tags: unknown[]) {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+
+  for (const tag of tags) {
+    const cleanTag = String(tag ?? "")
+      .replace(/[,\r\n]/g, " ")
+      .split(/\s+/)
+      .filter(Boolean)
+      .join("-");
+
+    if (!cleanTag) {
+      continue;
+    }
+
+    const key = cleanTag.toLowerCase();
+
+    if (!seen.has(key)) {
+      seen.add(key);
+      normalized.push(cleanTag);
+    }
+  }
+
+  return normalized;
+}
+
+function arraysEqual(left: string[], right: string[]) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function scheduleDraftSave(delayMs = draftAutosaveDelayMs) {
@@ -1787,19 +1970,40 @@ async function persistCurrentDraft() {
   const title = normalizeDraftTitle(draft.title);
   const body = normalizeDraftBody(draft.body);
   const status = draft.status;
+  const priority = draft.priority;
+  const size = draft.size;
+  const tags = [...draft.tags];
   const imagePaths = [...draft.pastedImages];
   const unusedImages = unusedDraftImages(draft);
   await cleanupTicketImages(projectId, unusedImages);
 
-  const updated = await api.updateTicket(projectId, ticketId, title, body, status);
+  const updated = normalizeTicket(await api.updateTicket(projectId, ticketId, title, body, status, priority, size, tags));
 
   clearDraftSaveError();
   state.tickets = state.tickets.map((ticket) => (ticket.id === updated.id ? updated : ticket)).sort(sortTickets);
+  updateEditorTimestamps(updated);
 
   if (state.draft?.id === ticketId) {
     const savedImages = new Set(imagePaths);
     state.draft.pastedImages = state.draft.pastedImages.filter((imagePath) => !savedImages.has(imagePath));
   }
+}
+
+function updateEditorTimestamps(ticket: Ticket) {
+  if (state.selectedTicketId !== ticket.id) {
+    return;
+  }
+
+  const timestamps = document.querySelector<HTMLElement>(".ticket-timestamps");
+
+  if (!timestamps) {
+    return;
+  }
+
+  timestamps.innerHTML = `
+    <span>Created ${escapeHtml(formatTimestamp(ticket.createdAt))}</span>
+    <span>Updated ${escapeHtml(formatTimestamp(ticket.updatedAt))}</span>
+  `;
 }
 
 async function waitForActiveDraftSave() {
@@ -1884,6 +2088,9 @@ function persistMockDraftSync() {
         title: normalizeDraftTitle(draft.title),
         body: normalizeDraftBody(draft.body),
         status: draft.status,
+        priority: draft.priority,
+        size: draft.size,
+        tags: [...draft.tags],
         updatedAt: Date.now()
       };
       return updated;
@@ -1896,7 +2103,9 @@ function persistMockDraftSync() {
     localStorage.setItem(mockStorageKey, JSON.stringify(store));
     clearScheduledDraftSave();
     clearDraftSaveError();
-    state.tickets = state.tickets.map((ticket) => (ticket.id === updated?.id ? updated : ticket)).sort(sortTickets);
+    const normalized = normalizeTicket(updated);
+    state.tickets = state.tickets.map((ticket) => (ticket.id === normalized.id ? normalized : ticket)).sort(sortTickets);
+    updateEditorTimestamps(normalized);
     state.draft.pastedImages = [];
     return true;
   } catch {
@@ -1996,7 +2205,7 @@ async function moveTicket(ticketId: string, status: Status, beforeId?: string) {
   render({ preserveScroll: true });
 
   try {
-    state.tickets = await api.reorderTickets(state.selectedProjectId, positions);
+    state.tickets = (await api.reorderTickets(state.selectedProjectId, positions)).map(normalizeTicket);
     render({ preserveScroll: true });
   } catch (error) {
     showError(error, { preserveScroll: true });
@@ -2455,6 +2664,14 @@ function columnForStatus(status: Status) {
 
 function isStatus(value: string | undefined): value is Status {
   return columns.some((column) => column.id === value);
+}
+
+function isPriority(value: string): value is TicketPriority {
+  return priorityOptions.some((option) => option.value === value);
+}
+
+function isSize(value: string): value is TicketSize {
+  return sizeOptions.some((option) => option.value === value);
 }
 
 function toggleStatusSelector(selector: HTMLElement | null) {
@@ -3621,12 +3838,25 @@ const api = {
 
     return mockStore.createTicket(projectId, status, title);
   },
-  async updateTicket(projectId: string, ticketId: string, title: string, body: string, status: Status) {
+  async updateTicket(
+    projectId: string,
+    ticketId: string,
+    title: string,
+    body: string,
+    status: Status,
+    priority: TicketPriority,
+    size: TicketSize,
+    tags: string[]
+  ) {
     if (isTauriRuntime) {
-      return invoke<Ticket>("update_ticket", { projectId, ticketId, title, body, status });
+      return invoke<Ticket>("update_ticket", {
+        projectId,
+        ticketId,
+        update: { title, body, status, priority, size, tags }
+      });
     }
 
-    return mockStore.updateTicket(projectId, ticketId, title, body, status);
+    return mockStore.updateTicket(projectId, ticketId, title, body, status, priority, size, tags);
   },
   async saveTicketImage(projectId: string, ticketId: string, mimeType: string, bytes: number[]) {
     if (isTauriRuntime) {
@@ -3681,6 +3911,9 @@ const mockStore = (() => {
             body: "Use **Markdown** for notes, links, and checklists.\n\n- Keep tickets portable\n- Make project folders easy to inspect",
             status: "todo",
             order: 1000,
+            priority: "P1",
+            size: "M",
+            tags: ["ideas", "capture"],
             createdAt: now,
             updatedAt: now,
             filePath: "~/todo.md/projects/inbox/capture-app-ideas.md"
@@ -3691,6 +3924,9 @@ const mockStore = (() => {
             body: "Columns are intentionally small for now:\n\n- To do\n- Doing\n- Done",
             status: "doing",
             order: 1000,
+            priority: "",
+            size: "S",
+            tags: ["board"],
             createdAt: now,
             updatedAt: now,
             filePath: "~/todo.md/projects/inbox/sketch-board-columns.md"
@@ -3701,6 +3937,9 @@ const mockStore = (() => {
             body: "Every card is backed by a plain `.md` file on disk.",
             status: "done",
             order: 1000,
+            priority: "",
+            size: "",
+            tags: [],
             createdAt: now,
             updatedAt: now,
             filePath: "~/todo.md/projects/inbox/keep-tickets-local.md"
@@ -3829,6 +4068,9 @@ const mockStore = (() => {
         body: "",
         status,
         order: (store.tickets[projectId]?.filter((candidate) => candidate.status === status).length ?? 0) * 1000 + 1000,
+        priority: "",
+        size: "",
+        tags: [],
         createdAt: now,
         updatedAt: now,
         filePath: `~/todo.md/projects/${projectId}/${id}.md`
@@ -3842,7 +4084,16 @@ const mockStore = (() => {
 
       return ticket;
     },
-    async updateTicket(projectId: string, ticketId: string, title: string, body: string, status: Status) {
+    async updateTicket(
+      projectId: string,
+      ticketId: string,
+      title: string,
+      body: string,
+      status: Status,
+      priority: TicketPriority,
+      size: TicketSize,
+      tags: string[]
+    ) {
       const store = read();
       let updated: Ticket | null = null;
 
@@ -3856,6 +4107,9 @@ const mockStore = (() => {
           title,
           body,
           status,
+          priority: normalizePriority(priority),
+          size: normalizeSize(size),
+          tags: normalizeTags(tags),
           updatedAt: Date.now()
         };
         return updated;

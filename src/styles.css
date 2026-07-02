@@ -687,6 +687,55 @@ select:focus {
   color: #1f5860;
 }
 
+.ticket-card-metadata {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.metadata-chip {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 22px;
+  align-items: center;
+  overflow: hidden;
+  border-radius: 6px;
+  padding: 0 7px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.priority-chip {
+  background: #efe7d8;
+  color: #5c4723;
+}
+
+.priority-chip-p0 {
+  background: #ffe0df;
+  color: #873333;
+}
+
+.priority-chip-p1 {
+  background: #f8e6c8;
+  color: #744810;
+}
+
+.priority-chip-p2 {
+  background: #e2ebff;
+  color: #27457e;
+}
+
+.tag-chip {
+  background: #dcefe6;
+  color: #174b3e;
+}
+
 .drag-handle {
   display: grid;
   width: 18px;
@@ -954,6 +1003,17 @@ select:focus {
   box-shadow: none;
 }
 
+.ticket-timestamps {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
 .editor-actions {
   display: flex;
   gap: 8px;
@@ -1118,9 +1178,40 @@ select:focus {
 
 .editor-body {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
   min-height: 0;
   overflow: hidden;
   padding: 16px 18px 18px;
+}
+
+.metadata-editor {
+  display: grid;
+  grid-template-columns: minmax(112px, 0.55fr) minmax(96px, 0.45fr) minmax(190px, 1.4fr);
+  gap: 10px;
+  align-items: end;
+}
+
+.metadata-field {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.metadata-field span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.tags-field {
+  min-width: 0;
 }
 
 .markdown-editor-shell {
@@ -1367,6 +1458,14 @@ select:focus {
   .editor-body {
     padding: 14px;
   }
+
+  .metadata-editor {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tags-field {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 640px) {
@@ -1416,5 +1515,13 @@ select:focus {
     left: 0;
     width: 100%;
     min-width: 168px;
+  }
+
+  .metadata-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .tags-field {
+    grid-column: auto;
   }
 }
