@@ -2444,12 +2444,7 @@ function renderTicketTitle(title: string) {
     ? `<span class="ticket-title-text">${escapeHtml(taggedTitle.text)}</span>`
     : "";
 
-  return `
-    <span class="ticket-title">
-      <span class="ticket-title-chip ticket-title-chip-${tagVariant}">${escapeHtml(taggedTitle.tag)}</span>
-      ${titleText}
-    </span>
-  `;
+  return `<span class="ticket-title"><span class="ticket-title-chip ticket-title-chip-${tagVariant}">${escapeHtml(taggedTitle.tag)}</span>${titleText}</span>`;
 }
 
 function parseTicketTitle(title: string): TaggedTicketTitle | null {
