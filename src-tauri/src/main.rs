@@ -29,7 +29,8 @@ fn main() {
             commands::save_ticket_image,
             commands::delete_ticket_image,
             commands::reorder_tickets,
-            commands::delete_ticket
+            commands::delete_ticket,
+            commands::archive_done_tickets
         ])
         .run(tauri::generate_context!())
         .expect("error while running todo.md");

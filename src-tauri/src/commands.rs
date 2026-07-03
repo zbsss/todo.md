@@ -22,8 +22,9 @@ use crate::{
     },
     text::{clean_title, normalize_newlines, now_millis, safe_segment, title_from_slug},
     tickets::{
-        apply_ticket_positions, list_tickets_from_disk, next_rank, read_ticket, unique_ticket_id,
-        validate_status, write_ticket,
+        apply_ticket_positions, archive_done_tickets as archive_done_tickets_on_disk,
+        list_tickets_from_disk, next_rank, read_ticket, unique_ticket_id, validate_status,
+        write_ticket,
     },
 };
 
@@ -300,4 +301,16 @@ pub(crate) fn delete_ticket(
     let ticket = read_ticket(&project_dir, &ticket_id)?;
 
     fs::remove_file(ticket.file_path).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub(crate) fn archive_done_tickets(
+    app: AppHandle,
+    project_id: String,
+) -> Result<Vec<Ticket>, String> {
+    let project_dir = project_dir(&app, &project_id)?;
+
+    archive_done_tickets_on_disk(&project_dir)?;
+
+    list_tickets_from_disk(&project_dir)
 }

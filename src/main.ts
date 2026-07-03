@@ -21,6 +21,7 @@ import {
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import {
+  Archive,
   ArrowDown,
   ArrowUp,
   Check,
@@ -562,13 +563,31 @@ function renderLoadingBoard() {
 
 function renderColumn(column: { id: Status; label: string; icon: string }) {
   const tickets = ticketsFor(column.id);
+  const action =
+    column.id === "done"
+      ? `
+        <div class="column-actions">
+          <span class="count">${tickets.length}</span>
+          <button
+            class="icon-button column-action"
+            data-action="archive-done"
+            type="button"
+            aria-label="Archive done tasks"
+            title="Archive done tasks"
+            ${tickets.length === 0 ? "disabled" : ""}
+          >
+            ${icon("archive")}
+          </button>
+        </div>
+      `
+      : `<span class="count">${tickets.length}</span>`;
 
   return `
     <section class="column" data-status="${column.id}">
       <div class="column-header">
         <span class="column-icon">${icon(column.icon)}</span>
         <h3>${column.label}</h3>
-        <span class="count">${tickets.length}</span>
+        ${action}
       </div>
 
       <div class="ticket-list" data-status="${column.id}">
@@ -1220,6 +1239,9 @@ function bindViewEvents() {
     });
   });
 
+  document.querySelector<HTMLButtonElement>('[data-action="archive-done"]')?.addEventListener("click", () => {
+    void archiveDoneTickets();
+  });
 }
 
 function bindProjectEvents() {
@@ -2604,6 +2626,46 @@ async function deleteTicket(ticketId: string) {
     render();
   } catch (error) {
     showError(error);
+  }
+}
+
+async function archiveDoneTickets() {
+  if (!state.selectedProjectId) {
+    return;
+  }
+
+  const doneTickets = ticketsFor("done");
+
+  if (doneTickets.length === 0) {
+    return;
+  }
+
+  if (!(await saveDraft({ flush: true }))) {
+    return;
+  }
+
+  const confirmed = await confirmAction(
+    `Archive ${doneTickets.length} done ${doneTickets.length === 1 ? "task" : "tasks"}?`,
+    "Archive done tasks"
+  );
+
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    clearScheduledDraftSave();
+    state.tickets = (await api.archiveDoneTickets(state.selectedProjectId)).sort(sortTickets);
+    state.workspace = updateTicketCount(state.workspace, state.selectedProjectId, -doneTickets.length);
+
+    if (state.selectedTicketId && !state.tickets.some((ticket) => ticket.id === state.selectedTicketId)) {
+      state.selectedTicketId = null;
+      state.draft = null;
+    }
+
+    render({ preserveScroll: true });
+  } catch (error) {
+    showError(error, { preserveScroll: true });
   }
 }
 
@@ -4131,6 +4193,7 @@ function icon(name: string) {
 function hydrateIcons() {
   createIcons({
     icons: {
+      Archive,
       ArrowDown,
       ArrowUp,
       Check,
