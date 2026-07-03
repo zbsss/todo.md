@@ -445,7 +445,7 @@ select:focus {
   width: min(360px, 34vw);
   min-width: 240px;
   height: 38px;
-  grid-template-columns: 20px minmax(0, 1fr) 28px auto;
+  grid-template-columns: 20px minmax(0, 1fr) auto 28px;
   align-items: center;
   gap: 5px;
   border: 1px solid var(--line);
@@ -518,12 +518,16 @@ select:focus {
 }
 
 .ticket-search-count {
-  min-width: 66px;
+  min-width: 0;
   color: var(--muted);
   font-size: 0.74rem;
   font-weight: 780;
   text-align: right;
   white-space: nowrap;
+}
+
+.ticket-search-count:empty {
+  display: none;
 }
 
 .eyebrow {

@@ -412,8 +412,8 @@ function render(options: RenderOptions = {}) {
             <p class="project-path">${escapeHtml(currentProject?.path ?? "Create a project to begin")}</p>
           </div>
           <div class="topbar-actions">
-            ${renderViewSwitcher()}
             ${renderTicketSearchControl()}
+            ${renderViewSwitcher()}
             <button class="ghost-button" data-action="refresh" title="Refresh board">
               ${icon("refresh-cw")}
               <span>Refresh</span>
@@ -518,6 +518,7 @@ function renderTicketSearchControl() {
         maxlength="${maxTicketSearchQueryLength}"
         ${state.selectedProjectId ? "" : "disabled"}
       />
+      <span class="ticket-search-count" data-search-count aria-live="polite">${escapeHtml(countText)}</span>
       <button
         type="button"
         class="ticket-search-clear"
@@ -528,7 +529,6 @@ function renderTicketSearchControl() {
       >
         ${icon("x")}
       </button>
-      <span class="ticket-search-count" data-search-count aria-live="polite">${escapeHtml(countText)}</span>
     </div>
   `;
 }
