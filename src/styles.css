@@ -79,6 +79,11 @@
   --focus-ring: rgba(35, 108, 90, 0.14);
   --focus-ring-strong: rgba(35, 108, 90, 0.42);
   --focus-ring-soft: rgba(35, 108, 90, 0.12);
+  --search-bg: var(--control-bg);
+  --search-focus-bg: var(--control-focus-bg);
+  --search-clear-hover-bg: var(--context-hover-bg);
+  --search-mark-bg: #ffe58a;
+  --search-mark-fg: #2f2610;
   --accent-tint: rgba(35, 108, 90, 0.1);
   --accent-tint-strong: rgba(35, 108, 90, 0.16);
   --accent-tint-soft: rgba(35, 108, 90, 0.07);
@@ -174,6 +179,8 @@
   --focus-ring: rgba(114, 199, 168, 0.22);
   --focus-ring-strong: rgba(114, 199, 168, 0.5);
   --focus-ring-soft: rgba(114, 199, 168, 0.18);
+  --search-mark-bg: #6b531f;
+  --search-mark-fg: #fff2c2;
   --accent-tint: rgba(114, 199, 168, 0.16);
   --accent-tint-strong: rgba(114, 199, 168, 0.22);
   --accent-tint-soft: rgba(114, 199, 168, 0.12);
@@ -269,6 +276,8 @@
   --focus-ring: rgba(142, 192, 124, 0.22);
   --focus-ring-strong: rgba(142, 192, 124, 0.52);
   --focus-ring-soft: rgba(142, 192, 124, 0.18);
+  --search-mark-bg: #66501a;
+  --search-mark-fg: #fbf1c7;
   --accent-tint: rgba(142, 192, 124, 0.16);
   --accent-tint-strong: rgba(142, 192, 124, 0.22);
   --accent-tint-soft: rgba(142, 192, 124, 0.12);
@@ -752,7 +761,7 @@ select:focus {
   gap: 5px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--search-bg);
   color: var(--muted);
   padding: 0 8px;
   transition:
@@ -767,9 +776,9 @@ select:focus {
 
 .ticket-search:focus-within,
 .ticket-search.is-active {
-  border-color: rgba(35, 108, 90, 0.42);
-  background: #ffffff;
-  box-shadow: 0 0 0 3px rgba(35, 108, 90, 0.1);
+  border-color: var(--focus-ring-strong);
+  background: var(--search-focus-bg);
+  box-shadow: 0 0 0 3px var(--focus-ring-soft);
 }
 
 .ticket-search-icon {
@@ -787,7 +796,12 @@ select:focus {
   border: 0;
   background: transparent;
   box-shadow: none;
+  color: var(--ink);
   padding: 0;
+}
+
+.ticket-search input::placeholder {
+  color: var(--muted);
 }
 
 .ticket-search input:focus {
@@ -817,7 +831,7 @@ select:focus {
 
 .ticket-search-clear:hover,
 .ticket-search-clear:focus-visible {
-  background: #f1eadf;
+  background: var(--search-clear-hover-bg);
   color: var(--ink);
   outline: none;
 }
@@ -1846,8 +1860,8 @@ select:focus {
 .ticket-title-search mark,
 .search-snippet mark {
   border-radius: 3px;
-  background: #fff0a6;
-  color: inherit;
+  background: var(--search-mark-bg);
+  color: var(--search-mark-fg);
   padding: 0 1px;
 }
 
