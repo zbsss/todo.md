@@ -67,6 +67,7 @@ import {
   resetBackdropDismissState,
   shouldDismissEditorOnBackdropPointerUp
 } from "./editorBackdropClose";
+import { shouldSkipSearchRenderForActiveEditor } from "./editorFocus";
 import type {
   ProjectSummary,
   RenderOptions,
@@ -4017,6 +4018,10 @@ async function runTicketSearch(query: string, renderOptions: RenderOptions = {})
 
     applyTicketSearchResults(results);
     state.searchPending = false;
+    if (shouldSkipSearchRenderForActiveEditor(state.draft !== null, document.activeElement as HTMLElement | null)) {
+      updateTicketSearchControl();
+      return true;
+    }
     render(renderOptions);
     return true;
   } catch (error) {
