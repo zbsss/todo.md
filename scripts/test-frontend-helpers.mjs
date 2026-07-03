@@ -35,6 +35,7 @@ execFileSync(
     resolve(repoRoot, "src/tickets/paths.ts"),
     resolve(repoRoot, "src/tickets/table.ts"),
     resolve(repoRoot, "src/api/mockStore.ts"),
+    resolve(repoRoot, "src/boardScroll.ts"),
     resolve(repoRoot, "src/markdown/escape.ts"),
     resolve(repoRoot, "src/markdown/render.ts"),
     resolve(repoRoot, "src/markdown/title.ts"),
@@ -51,6 +52,7 @@ const ordering = await import(pathToFileURL(join(outDir, "tickets/ordering.js"))
 const paths = await import(pathToFileURL(join(outDir, "tickets/paths.js")).href);
 const table = await import(pathToFileURL(join(outDir, "tickets/table.js")).href);
 const search = await import(pathToFileURL(join(outDir, "api/mockStore.js")).href);
+const boardScroll = await import(pathToFileURL(join(outDir, "boardScroll.js")).href);
 const markdown = await import(pathToFileURL(join(outDir, "markdown/render.js")).href);
 const title = await import(pathToFileURL(join(outDir, "markdown/title.js")).href);
 const images = await import(pathToFileURL(join(outDir, "markdown/images.js")).href);
@@ -186,6 +188,55 @@ test("normalizeStatus maps legacy todo to draft", () => {
   assert.equal(ordering.normalizeStatus("todo"), "draft");
   assert.equal(ordering.normalizeStatus("ready"), "ready");
   assert.equal(ordering.normalizeStatus("missing"), "draft");
+});
+
+test("boardScrollbarState hides the custom rail when the board fits", () => {
+  assert.deepEqual(
+    boardScroll.boardScrollbarState({
+      clientWidth: 960,
+      scrollLeft: 0,
+      scrollWidth: 960,
+      trackWidth: 420
+    }),
+    {
+      isScrollable: false,
+      maxScrollLeft: 0,
+      maxThumbLeft: 0,
+      scrollLeft: 0,
+      thumbLeft: 0,
+      thumbWidth: 420
+    }
+  );
+});
+
+test("boardScrollbarState sizes and positions the custom thumb proportionally", () => {
+  const state = boardScroll.boardScrollbarState({
+    clientWidth: 600,
+    scrollLeft: 300,
+    scrollWidth: 1200,
+    trackWidth: 300
+  });
+
+  assert.equal(state.isScrollable, true);
+  assert.equal(state.maxScrollLeft, 600);
+  assert.equal(state.thumbWidth, 150);
+  assert.equal(state.maxThumbLeft, 150);
+  assert.equal(state.thumbLeft, 75);
+});
+
+test("scrollLeftForScrollbarPointer maps track pointer movement to board scroll", () => {
+  assert.equal(
+    boardScroll.scrollLeftForScrollbarPointer({
+      clientWidth: 600,
+      pointerX: 260,
+      scrollLeft: 0,
+      scrollWidth: 1200,
+      thumbOffsetX: 10,
+      trackLeft: 100,
+      trackWidth: 300
+    }),
+    600
+  );
 });
 
 test("reorderProjectsForInsertion moves a project before a target", () => {

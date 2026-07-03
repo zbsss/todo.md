@@ -89,6 +89,7 @@ import {
   ticketsChanged,
   workspaceInfoChanged
 } from "./app/autoRefresh";
+import { boardScrollbarState, scrollLeftForScrollbarPointer } from "./boardScroll";
 import { escapeAttr, escapeHtml } from "./markdown/escape";
 import { imageExtensionForMime, resolveMarkdownImageSrc } from "./markdown/images";
 import { renderMarkdown } from "./markdown/render";
@@ -257,6 +258,15 @@ let automaticRefreshTimer: ReturnType<typeof window.setInterval> | null = null;
 let ticketSearchDebounceTimer: ReturnType<typeof window.setTimeout> | null = null;
 let isAutomaticRefreshRunning = false;
 let pendingLocalMutationCount = 0;
+let boardScrollbarDrag:
+  | {
+      board: HTMLElement;
+      pointerId: number;
+      thumb: HTMLElement;
+      thumbOffsetX: number;
+      track: HTMLElement;
+    }
+  | null = null;
 
 async function main() {
   bindGlobalKeys();
@@ -485,9 +495,11 @@ function render(options: RenderOptions = {}) {
   applyCardPreviewPrecedence();
   restoreSearchFocusSnapshot(searchFocusSnapshot);
   restoreScrollSnapshot(scrollSnapshot);
+  syncBoardScrollbar();
 
   if (options.revealTicket) {
     revealTicketInList(options.revealTicket.id, options.revealTicket.block ?? "nearest");
+    syncBoardScrollbar();
   }
 }
 
@@ -885,9 +897,7 @@ function renderKanbanBoard() {
   return `
     <div class="board-shell ${hasNoMatches ? "has-search-empty" : ""}">
       ${hasNoMatches ? renderNoSearchMatches() : ""}
-      <div class="board" aria-label="Task board">
-        ${columns.map(renderColumn).join("")}
-      </div>
+      ${renderBoardScrollFrame(columns.map(renderColumn).join(""), "Task board")}
     </div>
   `;
 }
@@ -921,8 +931,8 @@ function renderLoadingBoard() {
   }
 
   return `
-    <div class="board">
-      ${columns
+    ${renderBoardScrollFrame(
+      columns
         .map(
           (column) => `
             <section class="column">
@@ -935,7 +945,35 @@ function renderLoadingBoard() {
             </section>
           `
         )
-        .join("")}
+        .join(""),
+      "Loading task board"
+    )}
+  `;
+}
+
+function renderBoardScrollFrame(content: string, ariaLabel: string) {
+  return `
+    <div class="board-scroll-frame">
+      <div class="board" id="task-board" data-board-scroll-board aria-label="${escapeAttr(ariaLabel)}">
+        ${content}
+      </div>
+      <div class="board-scrollbar" data-board-scrollbar hidden aria-hidden="true">
+        <div class="board-scrollbar-track" data-board-scrollbar-track>
+          <div
+            class="board-scrollbar-thumb"
+            data-board-scrollbar-thumb
+            role="scrollbar"
+            tabindex="0"
+            aria-controls="task-board"
+            aria-label="Board horizontal scroll"
+            aria-orientation="horizontal"
+            aria-valuemin="0"
+            aria-valuemax="0"
+            aria-valuenow="0"
+            title="Scroll board horizontally"
+          ></div>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -1615,6 +1653,7 @@ function bindEvents() {
   bindTicketSearchEvents();
   bindTicketEvents();
   bindMetadataEvents();
+  bindBoardScrollbarEvents();
   bindEditorEvents();
 }
 
@@ -1707,6 +1746,151 @@ function bindViewEvents() {
   document.querySelector<HTMLButtonElement>('[data-action="archive-done"]')?.addEventListener("click", () => {
     void archiveDoneTickets();
   });
+}
+
+function bindBoardScrollbarEvents() {
+  const board = document.querySelector<HTMLElement>("[data-board-scroll-board]");
+  const scrollbar = document.querySelector<HTMLElement>("[data-board-scrollbar]");
+  const track = document.querySelector<HTMLElement>("[data-board-scrollbar-track]");
+  const thumb = document.querySelector<HTMLElement>("[data-board-scrollbar-thumb]");
+
+  if (!board || !scrollbar || !track || !thumb) {
+    return;
+  }
+
+  board.addEventListener("scroll", syncBoardScrollbar);
+
+  track.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || !event.isPrimary) {
+      return;
+    }
+
+    if ((event.target as HTMLElement | null)?.closest("[data-board-scrollbar-thumb]")) {
+      return;
+    }
+
+    const state = boardScrollbarState(boardScrollbarMetrics(board, track));
+
+    board.scrollLeft = scrollLeftForScrollbarPointer({
+      ...boardScrollbarMetrics(board, track),
+      pointerX: event.clientX,
+      thumbOffsetX: state.thumbWidth / 2,
+      trackLeft: track.getBoundingClientRect().left
+    });
+    syncBoardScrollbar();
+  });
+
+  thumb.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || !event.isPrimary) {
+      return;
+    }
+
+    event.preventDefault();
+    boardScrollbarDrag = {
+      board,
+      pointerId: event.pointerId,
+      thumb,
+      thumbOffsetX: event.clientX - thumb.getBoundingClientRect().left,
+      track
+    };
+    thumb.classList.add("is-dragging");
+    thumb.setPointerCapture(event.pointerId);
+  });
+
+  thumb.addEventListener("pointermove", (event) => {
+    if (!boardScrollbarDrag || boardScrollbarDrag.pointerId !== event.pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+    boardScrollbarDrag.board.scrollLeft = scrollLeftForScrollbarPointer({
+      ...boardScrollbarMetrics(boardScrollbarDrag.board, boardScrollbarDrag.track),
+      pointerX: event.clientX,
+      thumbOffsetX: boardScrollbarDrag.thumbOffsetX,
+      trackLeft: boardScrollbarDrag.track.getBoundingClientRect().left
+    });
+    syncBoardScrollbar();
+  });
+
+  thumb.addEventListener("pointerup", endBoardScrollbarDrag);
+  thumb.addEventListener("pointercancel", endBoardScrollbarDrag);
+
+  thumb.addEventListener("keydown", (event) => {
+    const maxScrollLeft = Math.max(0, board.scrollWidth - board.clientWidth);
+    const step = 72;
+    let nextScrollLeft = board.scrollLeft;
+
+    if (event.key === "ArrowLeft") {
+      nextScrollLeft -= step;
+    } else if (event.key === "ArrowRight") {
+      nextScrollLeft += step;
+    } else if (event.key === "PageUp") {
+      nextScrollLeft -= board.clientWidth * 0.8;
+    } else if (event.key === "PageDown") {
+      nextScrollLeft += board.clientWidth * 0.8;
+    } else if (event.key === "Home") {
+      nextScrollLeft = 0;
+    } else if (event.key === "End") {
+      nextScrollLeft = maxScrollLeft;
+    } else {
+      return;
+    }
+
+    event.preventDefault();
+    board.scrollLeft = Math.min(maxScrollLeft, Math.max(0, nextScrollLeft));
+    syncBoardScrollbar();
+  });
+}
+
+function syncBoardScrollbar() {
+  const board = document.querySelector<HTMLElement>("[data-board-scroll-board]");
+  const scrollbar = document.querySelector<HTMLElement>("[data-board-scrollbar]");
+  const track = document.querySelector<HTMLElement>("[data-board-scrollbar-track]");
+  const thumb = document.querySelector<HTMLElement>("[data-board-scrollbar-thumb]");
+  const frame = board?.closest<HTMLElement>(".board-scroll-frame") ?? null;
+
+  if (!board || !scrollbar || !track || !thumb || !frame) {
+    return;
+  }
+
+  scrollbar.hidden = false;
+  scrollbar.removeAttribute("aria-hidden");
+
+  const state = boardScrollbarState(boardScrollbarMetrics(board, track));
+
+  scrollbar.hidden = !state.isScrollable;
+  scrollbar.toggleAttribute("aria-hidden", !state.isScrollable);
+  frame.classList.toggle("has-board-scrollbar", state.isScrollable);
+
+  if (!state.isScrollable) {
+    return;
+  }
+
+  thumb.style.setProperty("--board-scroll-thumb-width", `${state.thumbWidth}px`);
+  thumb.style.setProperty("--board-scroll-thumb-left", `${state.thumbLeft}px`);
+  thumb.setAttribute("aria-valuemax", String(Math.round(state.maxScrollLeft)));
+  thumb.setAttribute("aria-valuenow", String(Math.round(state.scrollLeft)));
+}
+
+function boardScrollbarMetrics(board: HTMLElement, track: HTMLElement) {
+  return {
+    clientWidth: board.clientWidth,
+    scrollLeft: board.scrollLeft,
+    scrollWidth: board.scrollWidth,
+    trackWidth: track.getBoundingClientRect().width
+  };
+}
+
+function endBoardScrollbarDrag(event: PointerEvent) {
+  if (!boardScrollbarDrag || boardScrollbarDrag.pointerId !== event.pointerId) {
+    return;
+  }
+
+  boardScrollbarDrag.thumb.classList.remove("is-dragging");
+  if (boardScrollbarDrag.thumb.hasPointerCapture(event.pointerId)) {
+    boardScrollbarDrag.thumb.releasePointerCapture(event.pointerId);
+  }
+  boardScrollbarDrag = null;
 }
 
 function bindTicketSearchEvents() {
@@ -2910,6 +3094,7 @@ function bindGlobalKeys() {
 function bindLayoutGuards() {
   window.addEventListener("resize", () => {
     applyCardPreviewPrecedence();
+    syncBoardScrollbar();
   });
 }
 
