@@ -41,6 +41,7 @@ execFileSync(
     resolve(repoRoot, "src/markdown/images.ts"),
     resolve(repoRoot, "src/tickets/quickAdd.ts"),
     resolve(repoRoot, "src/projects/ordering.ts"),
+    resolve(repoRoot, "src/editorFocus.ts"),
     resolve(repoRoot, "src/quickAddTextarea.ts"),
     resolve(repoRoot, "src/settings/appearance.ts")
   ],
@@ -56,6 +57,7 @@ const title = await import(pathToFileURL(join(outDir, "markdown/title.js")).href
 const images = await import(pathToFileURL(join(outDir, "markdown/images.js")).href);
 const quickAdd = await import(pathToFileURL(join(outDir, "tickets/quickAdd.js")).href);
 const projectOrdering = await import(pathToFileURL(join(outDir, "projects/ordering.js")).href);
+const editorFocus = await import(pathToFileURL(join(outDir, "editorFocus.js")).href);
 const quickAddTextarea = await import(pathToFileURL(join(outDir, "quickAddTextarea.js")).href);
 const appearance = await import(pathToFileURL(join(outDir, "settings/appearance.js")).href);
 
@@ -430,6 +432,24 @@ test("active search disables reorder and marks mutations for rerun", () => {
   assert.equal(search.shouldDisableSearchReorder("   "), false);
   assert.equal(search.shouldRerunTicketSearchAfterMutation("P1"), true);
   assert.equal(search.shouldRerunTicketSearchAfterMutation(""), false);
+});
+
+test("active editor focus skips search rerender while a draft is open", () => {
+  const editorElement = {
+    closest(selector) {
+      return selector === ".editor-panel" ? {} : null;
+    }
+  };
+  const boardElement = {
+    closest() {
+      return null;
+    }
+  };
+
+  assert.equal(editorFocus.shouldSkipSearchRenderForActiveEditor(true, editorElement), true);
+  assert.equal(editorFocus.shouldSkipSearchRenderForActiveEditor(true, boardElement), false);
+  assert.equal(editorFocus.shouldSkipSearchRenderForActiveEditor(false, editorElement), false);
+  assert.equal(editorFocus.shouldSkipSearchRenderForActiveEditor(true, null), false);
 });
 
 test("mock search returns body snippets with escaped highlighted segments", () => {
