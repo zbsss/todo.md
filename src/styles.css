@@ -1127,12 +1127,85 @@ select:focus {
   justify-content: flex-start;
 }
 
+.board-scroll-frame {
+  display: grid;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0;
+  overflow: hidden;
+}
+
+.board-scroll-frame.has-board-scrollbar {
+  grid-template-rows: minmax(0, 1fr) 18px;
+  gap: 8px;
+}
+
 .board {
   display: grid;
   min-height: 0;
   grid-template-columns: repeat(5, minmax(230px, 1fr));
   gap: 14px;
   overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.board-scrollbar {
+  display: grid;
+  min-width: 0;
+  min-height: 18px;
+  align-items: center;
+  padding: 1px 4px;
+}
+
+.board-scrollbar[hidden] {
+  display: none;
+}
+
+.board-scrollbar-track {
+  position: relative;
+  height: 12px;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, var(--surface-softer), var(--surface-muted)),
+    var(--surface-muted);
+  box-shadow:
+    inset 0 1px 2px rgba(52, 45, 35, 0.08),
+    0 1px 0 var(--panel-border);
+  cursor: pointer;
+}
+
+.board-scrollbar-thumb {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  width: var(--board-scroll-thumb-width, 44px);
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-strong));
+  box-shadow:
+    0 1px 4px rgba(52, 45, 35, 0.16),
+    0 0 0 1px var(--accent-tint-strong);
+  cursor: grab;
+  touch-action: none;
+  transform: translateX(var(--board-scroll-thumb-left, 0));
+}
+
+.board-scrollbar-thumb:hover,
+.board-scrollbar-thumb:focus-visible,
+.board-scrollbar-thumb.is-dragging {
+  background: linear-gradient(90deg, var(--accent-strong), var(--accent));
+}
+
+.board-scrollbar-thumb:focus-visible {
+  outline: 2px solid var(--focus-ring-strong);
+  outline-offset: 3px;
+}
+
+.board-scrollbar-thumb.is-dragging {
+  cursor: grabbing;
 }
 
 .table-view {
@@ -2703,9 +2776,19 @@ select:focus {
     width: min(100%, 420px);
   }
 
+  .board-scroll-frame,
+  .board-scroll-frame.has-board-scrollbar {
+    grid-template-rows: minmax(0, 1fr);
+    gap: 0;
+  }
+
   .board {
     grid-template-columns: 1fr;
     overflow: visible;
+  }
+
+  .board-scrollbar {
+    display: none;
   }
 
   .table-view {
