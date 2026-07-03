@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    constants::STATUSES,
+    constants::{STATUSES, TASKS_DIR},
     models::{Ticket, TicketPosition},
     paths::ticket_storage_dir,
     text::{clean_title, infer_title, normalize_newlines, now_millis, safe_segment, slugify},
@@ -159,6 +159,29 @@ pub(crate) fn apply_ticket_positions(
     }
 
     Ok(())
+}
+
+pub(crate) fn archive_done_tickets(project_dir: &Path) -> Result<usize, String> {
+    let archived_dir = project_dir.join(TASKS_DIR).join("archived");
+    let mut archived_count = 0;
+
+    for ticket in list_tickets_from_disk(project_dir)? {
+        if ticket.status != "done" {
+            continue;
+        }
+
+        fs::create_dir_all(&archived_dir).map_err(|err| err.to_string())?;
+        let source = PathBuf::from(&ticket.file_path);
+        let file_name = source
+            .file_name()
+            .ok_or_else(|| "Ticket file path is invalid.".to_string())?;
+        let destination = unique_archive_path(&archived_dir, file_name);
+
+        fs::rename(&source, destination).map_err(|err| err.to_string())?;
+        archived_count += 1;
+    }
+
+    Ok(archived_count)
 }
 
 pub(crate) fn unique_ticket_id(project_dir: &Path, title: &str) -> String {
@@ -526,6 +549,35 @@ fn ticket_path(project_dir: &Path, ticket_id: &str) -> Result<PathBuf, String> {
     }
 
     Ok(project_dir.join(format!("{ticket_id}.md")))
+}
+
+fn unique_archive_path(archived_dir: &Path, file_name: &std::ffi::OsStr) -> PathBuf {
+    let first = archived_dir.join(file_name);
+
+    if !first.exists() {
+        return first;
+    }
+
+    let path = Path::new(file_name);
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("ticket");
+    let extension = path.extension().and_then(|value| value.to_str());
+
+    for index in 2.. {
+        let candidate_name = match extension {
+            Some(extension) => format!("{stem}-{index}.{extension}"),
+            None => format!("{stem}-{index}"),
+        };
+        let candidate = archived_dir.join(candidate_name);
+
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    unreachable!()
 }
 
 fn status_rank(status: &str) -> usize {

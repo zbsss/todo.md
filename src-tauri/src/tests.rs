@@ -19,8 +19,8 @@ use crate::{
     },
     text::now_millis,
     tickets::{
-        apply_ticket_positions, count_markdown_files, list_tickets_from_disk, normalize_status,
-        rank_between, rank_from_legacy_order, read_ticket, split_frontmatter,
+        apply_ticket_positions, archive_done_tickets, count_markdown_files, list_tickets_from_disk,
+        normalize_status, rank_between, rank_from_legacy_order, read_ticket, split_frontmatter,
         unique_ticket_id_from_base, validate_status, write_ticket,
     },
 };
@@ -141,6 +141,46 @@ fn agent_metadata_is_read_and_preserved_when_tickets_are_written() {
     assert!(contents.contains("\nsize: M\n"));
     assert!(!contents.contains("\ntags:"));
     assert!(contents.ends_with("\n\nUpdated body\n"));
+
+    fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[test]
+fn archive_done_tickets_moves_done_files_out_of_active_tasks() {
+    let dir = temp_project_dir("archive-done-tickets");
+    let ready_path = dir.join("ready-ticket.md");
+    let done_path = dir.join("done-ticket.md");
+    let archived_dir = dir.join(".tasks").join("archived");
+
+    fs::create_dir_all(&archived_dir).expect("create archived dir");
+    fs::write(
+        &ready_path,
+        "---\nid: ready-ticket\ntitle: Ready ticket\nstatus: ready\nrank: V\ncreated_at: 1\nupdated_at: 1\n---\n\nReady",
+    )
+    .expect("write ready ticket");
+    fs::write(
+        &done_path,
+        "---\nid: done-ticket\ntitle: Done ticket\nstatus: done\nrank: V\ncreated_at: 1\nupdated_at: 1\n---\n\nDone",
+    )
+    .expect("write done ticket");
+    fs::write(archived_dir.join("done-ticket.md"), "existing archive")
+        .expect("write existing archive");
+
+    let archived_count = archive_done_tickets(&dir).expect("archive done tickets");
+    let tickets = list_tickets_from_disk(&dir).expect("list remaining tickets");
+
+    assert_eq!(archived_count, 1);
+    assert!(ready_path.exists());
+    assert!(!done_path.exists());
+    assert!(archived_dir.join("done-ticket.md").exists());
+    assert!(archived_dir.join("done-ticket-2.md").exists());
+    assert_eq!(
+        tickets
+            .iter()
+            .map(|ticket| ticket.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["ready-ticket"]
+    );
 
     fs::remove_dir_all(dir).expect("cleanup");
 }

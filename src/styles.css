@@ -908,6 +908,25 @@ select:focus {
   font-weight: 800;
 }
 
+.column-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.column-action {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  color: var(--muted);
+}
+
+.column-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  transform: none;
+}
+
 .ticket-list {
   --drop-indicator-height: 3px;
   --ticket-gap: 10px;

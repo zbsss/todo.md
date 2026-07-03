@@ -42,6 +42,7 @@ export type TodoApi = {
   deleteTicketImage(projectId: string, markdownPath: string): Promise<void>;
   reorderTickets(projectId: string, positions: Array<{ id: string; status: Status; rank: string }>): Promise<Ticket[]>;
   deleteTicket(projectId: string, ticketId: string): Promise<void>;
+  archiveDoneTickets(projectId: string): Promise<Ticket[]>;
   persistDraftSync(options: PersistDraftSyncOptions): Ticket | null;
 };
 
@@ -174,6 +175,13 @@ export function createApi({ isTauriRuntime, mockStore = createMockStore() }: Cre
       }
 
       return mockStore.deleteTicket(projectId, ticketId);
+    },
+    async archiveDoneTickets(projectId: string) {
+      if (isTauriRuntime) {
+        return invoke<Ticket[]>("archive_done_tickets", { projectId });
+      }
+
+      return mockStore.archiveDoneTickets(projectId);
     },
     persistDraftSync(options: PersistDraftSyncOptions) {
       if (isTauriRuntime) {

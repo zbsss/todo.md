@@ -326,6 +326,21 @@ export function createMockStore() {
       );
       write(store);
     },
+    async archiveDoneTickets(projectId: string) {
+      const store = read();
+      const tickets = store.tickets[projectId] ?? [];
+      const archivedCount = tickets.filter((ticket) => ticket.status === "done").length;
+
+      store.tickets[projectId] = tickets.filter((ticket) => ticket.status !== "done");
+      store.workspace.projects = store.workspace.projects.map((project) =>
+        project.id === projectId
+          ? { ...project, ticketCount: Math.max(0, project.ticketCount - archivedCount) }
+          : project
+      );
+      write(store);
+
+      return store.tickets[projectId];
+    },
     persistDraftSync({ projectId, draft, title, body }: PersistMockDraftOptions) {
       const raw = localStorage.getItem(mockStorageKey);
 
