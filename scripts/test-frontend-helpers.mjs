@@ -40,7 +40,8 @@ execFileSync(
     resolve(repoRoot, "src/markdown/title.ts"),
     resolve(repoRoot, "src/markdown/images.ts"),
     resolve(repoRoot, "src/tickets/quickAdd.ts"),
-    resolve(repoRoot, "src/quickAddTextarea.ts")
+    resolve(repoRoot, "src/quickAddTextarea.ts"),
+    resolve(repoRoot, "src/settings/appearance.ts")
   ],
   { stdio: "inherit" }
 );
@@ -54,6 +55,7 @@ const title = await import(pathToFileURL(join(outDir, "markdown/title.js")).href
 const images = await import(pathToFileURL(join(outDir, "markdown/images.js")).href);
 const quickAdd = await import(pathToFileURL(join(outDir, "tickets/quickAdd.js")).href);
 const quickAddTextarea = await import(pathToFileURL(join(outDir, "quickAddTextarea.js")).href);
+const appearance = await import(pathToFileURL(join(outDir, "settings/appearance.js")).href);
 
 function ticket(overrides) {
   return {
@@ -272,6 +274,57 @@ test("renderTicketTitle escapes tag and text content", () => {
     /<span class="ticket-title-chip ticket-title-chip-\d">Bug<\/span><span class="ticket-title-text">Fix &lt;script&gt;<\/span>/
   );
   assert.equal(title.titleDisplayValue("  "), "Untitled ticket");
+});
+
+test("parseAppearanceSettings falls back to defaults for invalid stored settings", () => {
+  assert.deepEqual(appearance.parseAppearanceSettings(null), appearance.defaultAppearanceSettings);
+  assert.deepEqual(appearance.parseAppearanceSettings("{broken"), appearance.defaultAppearanceSettings);
+  assert.deepEqual(
+    appearance.parseAppearanceSettings(
+      JSON.stringify({
+        colorScheme: "unknown",
+        fontFamily: "display",
+        fontSize: "large"
+      })
+    ),
+    appearance.defaultAppearanceSettings
+  );
+});
+
+test("normalizeAppearanceSettings preserves supported appearance settings", () => {
+  assert.deepEqual(
+    appearance.normalizeAppearanceSettings({
+      colorScheme: "dark",
+      fontFamily: "mono",
+      fontSize: 17
+    }),
+    {
+      colorScheme: "dark",
+      fontFamily: "mono",
+      fontSize: 17
+    }
+  );
+});
+
+test("normalizeAppearanceSettings clamps font size", () => {
+  assert.equal(appearance.normalizeAppearanceSettings({ fontSize: 2 }).fontSize, appearance.minFontSize);
+  assert.equal(appearance.normalizeAppearanceSettings({ fontSize: 99 }).fontSize, appearance.maxFontSize);
+  assert.equal(appearance.normalizeAppearanceSettings({ fontSize: "17.4" }).fontSize, 17);
+});
+
+test("serializeAppearanceSettings stores normalized values", () => {
+  assert.equal(
+    appearance.serializeAppearanceSettings({
+      colorScheme: "gruvbox",
+      fontFamily: "serif",
+      fontSize: 200
+    }),
+    JSON.stringify({
+      colorScheme: "gruvbox",
+      fontFamily: "serif",
+      fontSize: appearance.maxFontSize
+    })
+  );
 });
 
 test("image helpers normalize task image paths and reject path traversal", () => {

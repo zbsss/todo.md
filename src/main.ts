@@ -36,13 +36,18 @@ import {
   GripVertical,
   ListTodo,
   LoaderCircle,
+  Moon,
+  Palette,
   Pencil,
   Plus,
   RefreshCw,
   Save,
   Search,
+  Settings,
+  Sun,
   Table2,
   Trash2,
+  Type,
   X
 } from "lucide";
 import { createApi } from "./api/client";
@@ -95,6 +100,21 @@ import {
 } from "./markdown/title";
 import { bindQuickAddTextarea } from "./quickAddTextarea";
 import { findTaskSelectorFromTarget } from "./taskSelectorClose";
+import {
+  appFontCss,
+  appFontOptions,
+  appearanceStorageKey,
+  colorSchemeOptions,
+  defaultAppearanceSettings,
+  maxFontSize,
+  minFontSize,
+  normalizeAppearanceSettings,
+  parseAppearanceSettings,
+  serializeAppearanceSettings,
+  type AppearanceSettings,
+  type AppFont,
+  type ColorScheme
+} from "./settings/appearance";
 import { insertTicket, rankForInsertion, sortTickets } from "./tickets/ordering";
 import { ticketPathRelativeToProject } from "./tickets/paths";
 import { canQuickAddTicket } from "./tickets/quickAdd";
@@ -131,6 +151,8 @@ const projectDragType = "application/x-todo-md-project";
 const maxPastedImageBytes = 25 * 1024 * 1024;
 const projectViewModeStorageKey = "todo.md.project-view-modes";
 
+type ActivePage = "project" | "settings";
+
 type ProjectViewMode = "board" | "table";
 
 type ProjectTableState = {
@@ -143,6 +165,7 @@ type SearchFocusSnapshot = {
 } | null;
 
 const state: {
+  activePage: ActivePage;
   workspace: WorkspaceInfo | null;
   selectedProjectId: string | null;
   tickets: Ticket[];
@@ -157,6 +180,7 @@ const state: {
   isLoading: boolean;
   error: string | null;
   draftSaveError: string | null;
+  appearance: AppearanceSettings;
   projectViewModes: Record<string, ProjectViewMode>;
   projectTableStates: Record<string, ProjectTableState>;
   searchQuery: string;
@@ -165,6 +189,7 @@ const state: {
   searchResultMap: Map<string, TicketSearchResult>;
   searchRequestSeq: number;
 } = {
+  activePage: "project",
   workspace: null,
   selectedProjectId: null,
   tickets: [],
@@ -179,6 +204,7 @@ const state: {
   isLoading: true,
   error: null,
   draftSaveError: null,
+  appearance: readAppearanceSettings(),
   projectViewModes: readProjectViewModes(),
   projectTableStates: {},
   searchQuery: "",
@@ -191,6 +217,8 @@ const state: {
 const runtime = detectAppRuntime();
 const isTauriRuntime = runtime.isTauri;
 const api = createApi({ isTauriRuntime });
+
+applyAppearanceSettings(state.appearance);
 
 document.addEventListener("pointerdown", (event) => {
   if (!findTaskSelectorFromTarget(event.target)) {
@@ -376,6 +404,7 @@ function render(options: RenderOptions = {}) {
   const currentProject = workspace?.projects.find(
     (project) => project.id === state.selectedProjectId
   );
+  const isSettingsPage = state.activePage === "settings";
 
   appRoot.innerHTML = `
     <div class="shell">
@@ -403,26 +432,44 @@ function render(options: RenderOptions = {}) {
         <nav class="project-list" aria-label="Projects">
           ${renderProjects(workspace?.projects ?? [])}
         </nav>
+
+        <button
+          class="sidebar-action settings-nav ${isSettingsPage ? "active" : ""}"
+          data-action="open-settings"
+          title="Settings"
+          aria-pressed="${isSettingsPage}"
+        >
+          ${icon("settings")}
+          <span>Settings</span>
+        </button>
       </aside>
 
-      <section class="workspace">
+      <section class="workspace ${isSettingsPage ? "workspace-settings" : ""}">
         <header class="topbar">
           <div>
-            <p class="eyebrow">Project</p>
-            <h2>${escapeHtml(currentProject?.name ?? "No project")}</h2>
+            <p class="eyebrow">${isSettingsPage ? "Preferences" : "Project"}</p>
+            <h2>${escapeHtml(isSettingsPage ? "Settings" : (currentProject?.name ?? "No project"))}</h2>
+            <p class="project-path">${escapeHtml(
+              isSettingsPage ? "Appearance and typography" : (currentProject?.path ?? "Create a project to begin")
+            )}</p>
           </div>
           <div class="topbar-actions">
-            ${renderTicketSearchControl()}
-            ${renderViewSwitcher()}
-            <button class="ghost-button" data-action="refresh" title="Refresh board">
-              ${icon("refresh-cw")}
-              <span>Refresh</span>
-            </button>
+            ${
+              isSettingsPage
+                ? ""
+                : `
+                  ${renderTicketSearchControl()}
+                  ${renderViewSwitcher()}
+                  <button class="ghost-button" data-action="refresh" title="Refresh board">
+                    ${icon("refresh-cw")}
+                    <span>Refresh</span>
+                  </button>
+                `
+            }
           </div>
         </header>
 
-        ${state.error ? `<div class="notice">${escapeHtml(state.error)}</div>` : ""}
-        ${state.isLoading ? renderLoadingBoard() : renderBoard()}
+        ${isSettingsPage ? renderSettingsPage() : renderProjectWorkspace()}
       </section>
     </div>
 
@@ -443,6 +490,13 @@ function render(options: RenderOptions = {}) {
   }
 }
 
+function renderProjectWorkspace() {
+  return `
+    ${state.error ? `<div class="notice">${escapeHtml(state.error)}</div>` : ""}
+    ${state.isLoading ? renderLoadingBoard() : renderBoard()}
+  `;
+}
+
 function renderProjects(projects: ProjectSummary[]) {
   if (!projects.length) {
     return `<p class="empty-state">No projects yet</p>`;
@@ -450,7 +504,7 @@ function renderProjects(projects: ProjectSummary[]) {
 
   return projects
     .map((project) => {
-      const isActive = project.id === state.selectedProjectId;
+      const isActive = state.activePage === "project" && project.id === state.selectedProjectId;
 
       return `
         <button
@@ -530,6 +584,148 @@ function renderTicketSearchControl() {
         ${icon("x")}
       </button>
     </div>
+  `;
+}
+
+function renderSettingsPage() {
+  const settings = state.appearance;
+  const selectedFont = appFontOptions.find((option) => option.value === settings.fontFamily) ?? appFontOptions[0];
+
+  return `
+    <main class="settings-page" aria-label="Settings">
+      <section class="settings-panel" aria-labelledby="settings-appearance-title">
+        <header class="settings-section-header">
+          <span class="settings-section-icon">${icon("palette")}</span>
+          <div>
+            <h3 id="settings-appearance-title">Color scheme</h3>
+          </div>
+        </header>
+
+        <div class="settings-segmented" role="group" aria-label="Color scheme">
+          ${colorSchemeOptions
+            .map((option) => {
+              const isSelected = option.value === settings.colorScheme;
+
+              return `
+                <button
+                  type="button"
+                  class="settings-segment ${isSelected ? "active" : ""}"
+                  data-action="set-color-scheme"
+                  data-color-scheme="${escapeAttr(option.value)}"
+                  aria-pressed="${isSelected}"
+                >
+                  ${icon(option.icon)}
+                  <span>${escapeHtml(option.label)}</span>
+                </button>
+              `;
+            })
+            .join("")}
+        </div>
+      </section>
+
+      <section class="settings-panel" aria-labelledby="settings-typography-title">
+        <header class="settings-section-header">
+          <span class="settings-section-icon">${icon("type")}</span>
+          <div>
+            <h3 id="settings-typography-title">Typography</h3>
+          </div>
+        </header>
+
+        <div class="settings-fields">
+          <label class="settings-field">
+            <span>Font</span>
+            <select name="fontFamily" data-action="set-font-family">
+              ${appFontOptions
+                .map(
+                  (option) => `
+                    <option value="${escapeAttr(option.value)}" ${option.value === settings.fontFamily ? "selected" : ""}>
+                      ${escapeHtml(option.label)}
+                    </option>
+                  `
+                )
+                .join("")}
+            </select>
+          </label>
+
+          <label class="settings-field settings-font-size-field">
+            <span>Font size</span>
+            <div class="settings-font-size-control">
+              <input
+                type="range"
+                name="fontSizeRange"
+                data-action="set-font-size"
+                min="${minFontSize}"
+                max="${maxFontSize}"
+                step="1"
+                value="${settings.fontSize}"
+                aria-label="Font size"
+              />
+              <input
+                type="number"
+                name="fontSize"
+                data-action="set-font-size"
+                min="${minFontSize}"
+                max="${maxFontSize}"
+                step="1"
+                value="${settings.fontSize}"
+                aria-label="Font size in pixels"
+              />
+            </div>
+          </label>
+        </div>
+      </section>
+
+      <section class="settings-panel settings-preview-panel" aria-labelledby="settings-preview-title">
+        <header class="settings-section-header">
+          <span class="settings-section-icon">${icon("eye")}</span>
+          <div>
+            <h3 id="settings-preview-title">Preview</h3>
+          </div>
+        </header>
+
+        <div class="settings-preview">
+          <article class="ticket-card settings-preview-card" aria-label="Preview ticket">
+            <div class="ticket-topline">
+              <h4><span class="ticket-title"><span class="ticket-title-chip ticket-title-chip-0">Design</span><span class="ticket-title-text">Tune the task board</span></span></h4>
+              <span class="drag-handle">${icon("grip-vertical")}</span>
+            </div>
+            <div class="ticket-task-metadata">
+              <span class="task-chip task-chip-priority task-priority-p2">P2</span>
+              <span class="task-chip task-chip-size">XL</span>
+            </div>
+            <div class="markdown card-markdown">
+              <p>Review active tickets, tune contrast, and ship a calm theme.</p>
+            </div>
+          </article>
+
+          <div class="settings-preview-stack" aria-hidden="true">
+            <button class="ghost-button" type="button" tabindex="-1">
+              ${icon("refresh-cw")}
+              <span>Refresh</span>
+            </button>
+            <div class="status-selector settings-preview-selector">
+              <button class="status-selector-button" type="button" tabindex="-1">
+                <span class="status-current">
+                  <span class="status-current-icon status-icon-doing">${icon("loader-circle")}</span>
+                  <span>Doing</span>
+                </span>
+                <span class="status-chevron">${icon("chevron-down")}</span>
+              </button>
+            </div>
+            <p class="settings-preview-type" style="font-family: ${escapeAttr(selectedFont.css)};">
+              ${escapeHtml(selectedFont.label)} / ${settings.fontSize}px
+            </p>
+          </div>
+        </div>
+
+        <footer class="settings-actions">
+          <button class="ghost-button" type="button" data-action="reset-appearance">
+            ${icon("refresh-cw")}
+            <span>Reset</span>
+          </button>
+        </footer>
+      </section>
+    </main>
   `;
 }
 
@@ -1412,12 +1608,78 @@ function taskSelectorMarkClass(kind: TaskSelectorKind, value: string) {
 }
 
 function bindEvents() {
+  bindSettingsEvents();
   bindProjectEvents();
   bindViewEvents();
   bindTicketSearchEvents();
   bindTicketEvents();
   bindMetadataEvents();
   bindEditorEvents();
+}
+
+function bindSettingsEvents() {
+  document.querySelector<HTMLButtonElement>('[data-action="open-settings"]')?.addEventListener("click", async () => {
+    if (state.activePage === "settings") {
+      return;
+    }
+
+    if (!(await confirmDiscardDraft())) {
+      return;
+    }
+
+    closeContextMenus({ shouldRender: false });
+    state.activePage = "settings";
+    state.selectedTicketId = null;
+    state.draft = null;
+    render();
+  });
+
+  document.querySelectorAll<HTMLButtonElement>('[data-action="set-color-scheme"]').forEach((button) => {
+    button.addEventListener("click", () => {
+      const colorScheme = button.dataset.colorScheme;
+
+      if (isColorSchemeSetting(colorScheme)) {
+        updateAppearanceSettings({ colorScheme });
+      }
+    });
+  });
+
+  document.querySelector<HTMLSelectElement>('select[data-action="set-font-family"]')?.addEventListener("change", (event) => {
+    const fontFamily = (event.currentTarget as HTMLSelectElement).value;
+
+    if (isAppFontSetting(fontFamily)) {
+      updateAppearanceSettings({ fontFamily });
+    }
+  });
+
+  document.querySelectorAll<HTMLInputElement>('input[data-action="set-font-size"]').forEach((input) => {
+    input.addEventListener("input", () => {
+      if (!input.value.trim()) {
+        return;
+      }
+
+      const fontSize = Number(input.value);
+
+      if (input.type === "range" || isFontSizeInRange(fontSize)) {
+        updateAppearanceSettings({ fontSize }, { shouldRender: false });
+        syncFontSizeControls();
+      }
+    });
+
+    input.addEventListener("change", () => {
+      if (!input.value.trim()) {
+        syncFontSizeControls();
+        return;
+      }
+
+      updateAppearanceSettings({ fontSize: Number(input.value) }, { shouldRender: false });
+      syncFontSizeControls();
+    });
+  });
+
+  document.querySelector<HTMLButtonElement>('[data-action="reset-appearance"]')?.addEventListener("click", () => {
+    updateAppearanceSettings(defaultAppearanceSettings);
+  });
 }
 
 function bindViewEvents() {
@@ -1491,6 +1753,7 @@ function bindProjectEvents() {
       try {
         const project = await trackLocalMutation(api.createProject(name));
         state.workspace?.projects.push(project);
+        state.activePage = "project";
         state.selectedProjectId = project.id;
         state.selectedTicketId = null;
         state.draft = null;
@@ -1522,6 +1785,7 @@ function bindProjectEvents() {
       }
 
       const project = await trackLocalMutation(api.importProject(path));
+      state.activePage = "project";
       state.selectedProjectId = project.id;
       state.selectedTicketId = null;
       state.draft = null;
@@ -1592,7 +1856,13 @@ function bindProjectEvents() {
     button.addEventListener("click", async () => {
       const projectId = button.dataset.projectId;
 
-      if (!projectId || projectId === state.selectedProjectId) {
+      if (!projectId) {
+        return;
+      }
+
+      const isCurrentProject = projectId === state.selectedProjectId;
+
+      if (isCurrentProject && state.activePage === "project") {
         return;
       }
 
@@ -1601,9 +1871,16 @@ function bindProjectEvents() {
       }
 
       try {
+        state.activePage = "project";
         state.selectedProjectId = projectId;
         state.selectedTicketId = null;
         state.draft = null;
+
+        if (isCurrentProject) {
+          render();
+          return;
+        }
+
         state.isLoading = true;
         render();
         await loadTickets(projectId);
@@ -3420,6 +3697,74 @@ function updateProjectInWorkspace(workspace: WorkspaceInfo | null, updated: Proj
   };
 }
 
+function readAppearanceSettings() {
+  try {
+    return parseAppearanceSettings(localStorage.getItem(appearanceStorageKey));
+  } catch {
+    return { ...defaultAppearanceSettings };
+  }
+}
+
+function persistAppearanceSettings() {
+  try {
+    localStorage.setItem(appearanceStorageKey, serializeAppearanceSettings(state.appearance));
+  } catch {
+    return;
+  }
+}
+
+function applyAppearanceSettings(settings: AppearanceSettings) {
+  const normalized = normalizeAppearanceSettings(settings);
+  const root = document.documentElement;
+
+  root.dataset.colorScheme = normalized.colorScheme;
+  root.style.setProperty("--app-font-family", appFontCss(normalized.fontFamily));
+  root.style.setProperty("--app-font-size", `${normalized.fontSize}px`);
+}
+
+function updateAppearanceSettings(
+  settings: Partial<AppearanceSettings>,
+  options: { shouldRender?: boolean } = {}
+) {
+  state.appearance = normalizeAppearanceSettings({
+    ...state.appearance,
+    ...settings
+  });
+  applyAppearanceSettings(state.appearance);
+  persistAppearanceSettings();
+
+  if (options.shouldRender !== false) {
+    render({ preserveScroll: true });
+  }
+}
+
+function isColorSchemeSetting(value: string | undefined): value is ColorScheme {
+  return colorSchemeOptions.some((option) => option.value === value);
+}
+
+function isAppFontSetting(value: string | undefined): value is AppFont {
+  return appFontOptions.some((option) => option.value === value);
+}
+
+function isFontSizeInRange(value: number) {
+  return Number.isFinite(value) && value >= minFontSize && value <= maxFontSize;
+}
+
+function syncFontSizeControls() {
+  const value = String(state.appearance.fontSize);
+
+  document.querySelectorAll<HTMLInputElement>('input[data-action="set-font-size"]').forEach((input) => {
+    input.value = value;
+  });
+
+  const selectedFont = appFontOptions.find((option) => option.value === state.appearance.fontFamily) ?? appFontOptions[0];
+  const previewType = document.querySelector<HTMLElement>(".settings-preview-type");
+
+  if (previewType) {
+    previewType.textContent = `${selectedFont.label} / ${state.appearance.fontSize}px`;
+  }
+}
+
 function currentProjectViewMode(): ProjectViewMode {
   const projectId = state.selectedProjectId;
 
@@ -4776,13 +5121,18 @@ function hydrateIcons() {
       GripVertical,
       ListTodo,
       LoaderCircle,
+      Moon,
+      Palette,
       Pencil,
       Plus,
       RefreshCw,
       Save,
       Search,
+      Settings,
+      Sun,
       Table2,
       Trash2,
+      Type,
       X
     }
   });
