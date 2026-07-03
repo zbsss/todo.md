@@ -32,6 +32,7 @@ execFileSync(
     "--strict",
     "--skipLibCheck",
     resolve(repoRoot, "src/tickets/ordering.ts"),
+    resolve(repoRoot, "src/tickets/paths.ts"),
     resolve(repoRoot, "src/tickets/table.ts"),
     resolve(repoRoot, "src/markdown/render.ts"),
     resolve(repoRoot, "src/markdown/title.ts"),
@@ -42,6 +43,7 @@ execFileSync(
 );
 
 const ordering = await import(pathToFileURL(join(outDir, "tickets/ordering.js")).href);
+const paths = await import(pathToFileURL(join(outDir, "tickets/paths.js")).href);
 const table = await import(pathToFileURL(join(outDir, "tickets/table.js")).href);
 const markdown = await import(pathToFileURL(join(outDir, "markdown/render.js")).href);
 const title = await import(pathToFileURL(join(outDir, "markdown/title.js")).href);
@@ -166,6 +168,25 @@ test("normalizeStatus maps legacy todo to draft", () => {
   assert.equal(ordering.normalizeStatus("todo"), "draft");
   assert.equal(ordering.normalizeStatus("ready"), "ready");
   assert.equal(ordering.normalizeStatus("missing"), "draft");
+});
+
+test("ticketPathRelativeToProject returns a project-relative ticket path", () => {
+  assert.equal(
+    paths.ticketPathRelativeToProject("/Users/example/project/.tasks/ticket.md", "/Users/example/project"),
+    ".tasks/ticket.md"
+  );
+  assert.equal(
+    paths.ticketPathRelativeToProject("C:\\Users\\example\\project\\.tasks\\ticket.md", "C:\\Users\\example\\project"),
+    ".tasks\\ticket.md"
+  );
+  assert.equal(
+    paths.ticketPathRelativeToProject("C:\\Users\\Example\\Project\\.tasks\\ticket.md", "c:\\users\\example\\project"),
+    ".tasks/ticket.md"
+  );
+  assert.equal(
+    paths.ticketPathRelativeToProject("/Users/example/other/.tasks/ticket.md", "/Users/example/project"),
+    "/Users/example/other/.tasks/ticket.md"
+  );
 });
 
 test("sortTicketsForTable sorts by an explicit table column", () => {
