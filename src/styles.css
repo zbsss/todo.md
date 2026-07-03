@@ -2300,8 +2300,33 @@ select:focus {
 
 .task-chip-size,
 .task-selector-mark-size {
-  background: var(--metadata-bg);
+  background: var(--size-chip-bg);
   color: var(--size-chip-fg);
+}
+
+.task-size-xs {
+  background: var(--tag-5-bg);
+  color: var(--tag-5-fg);
+}
+
+.task-size-s {
+  background: var(--tag-0-bg);
+  color: var(--tag-0-fg);
+}
+
+.task-size-m {
+  background: var(--tag-1-bg);
+  color: var(--tag-1-fg);
+}
+
+.task-size-l {
+  background: var(--tag-3-bg);
+  color: var(--tag-3-fg);
+}
+
+.task-size-xl {
+  background: var(--tag-4-bg);
+  color: var(--tag-4-fg);
 }
 
 .task-selector-mark-priority.task-priority-p0 {
