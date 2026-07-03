@@ -761,8 +761,10 @@ select:focus {
 }
 
 .table-selector .status-menu {
+  position: fixed;
   right: auto;
-  left: 0;
+  left: -9999px;
+  top: -9999px;
 }
 
 .table-selector-compact {
@@ -1652,7 +1654,7 @@ select:focus {
   top: calc(100% + 7px);
   right: 0;
   z-index: 65;
-  display: none;
+  display: grid;
   width: 168px;
   gap: 2px;
   padding: 5px;
@@ -1665,14 +1667,16 @@ select:focus {
   transform: translateY(-4px);
   transition:
     opacity 120ms ease,
-    transform 120ms ease;
+    transform 120ms ease,
+    visibility 120ms ease;
+  visibility: hidden;
 }
 
 .status-selector.is-open .status-menu {
-  display: grid;
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);
+  visibility: visible;
 }
 
 .status-option {
