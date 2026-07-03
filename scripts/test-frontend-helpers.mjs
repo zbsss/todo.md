@@ -191,11 +191,11 @@ test("ticketPathRelativeToProject returns a project-relative ticket path", () =>
   );
 });
 
-test("canQuickAddTicket only allows backlog-oriented columns", () => {
+test("canQuickAddTicket only allows the draft column", () => {
   assert.equal(quickAdd.canQuickAddTicket("draft"), true);
-  assert.equal(quickAdd.canQuickAddTicket("ready"), true);
-  assert.equal(quickAdd.canQuickAddTicket("review"), true);
+  assert.equal(quickAdd.canQuickAddTicket("ready"), false);
   assert.equal(quickAdd.canQuickAddTicket("doing"), false);
+  assert.equal(quickAdd.canQuickAddTicket("review"), false);
   assert.equal(quickAdd.canQuickAddTicket("done"), false);
 });
 
