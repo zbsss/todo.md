@@ -72,6 +72,7 @@ import {
   titleDisplayValue,
   untitledTicketTitle
 } from "./markdown/title";
+import { findTaskSelectorFromTarget } from "./taskSelectorClose";
 import { insertTicket, rankForInsertion, sortTickets } from "./tickets/ordering";
 import {
   defaultTableSorts,
@@ -151,6 +152,13 @@ const state: {
 const runtime = detectAppRuntime();
 const isTauriRuntime = runtime.isTauri;
 const api = createApi({ isTauriRuntime });
+
+document.addEventListener("pointerdown", (event) => {
+  if (!findTaskSelectorFromTarget(event.target)) {
+    closeTaskSelector();
+  }
+});
+
 let markdownEditorView: EditorView | null = null;
 const pendingImageUploads = new Set<Promise<void>>();
 const draftAutosaveDelayMs = 700;
