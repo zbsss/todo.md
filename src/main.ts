@@ -28,6 +28,7 @@ import {
   CircleCheck,
   Copy,
   createIcons,
+  Eye,
   Folder,
   FolderOpen,
   FolderPlus,
@@ -80,8 +81,10 @@ import {
 } from "./tickets/table";
 import "./styles.css";
 const columns: Array<{ id: Status; label: string; icon: string }> = [
-  { id: "todo", label: "To do", icon: "list-todo" },
+  { id: "draft", label: "Draft", icon: "pencil" },
+  { id: "ready", label: "Ready", icon: "list-todo" },
   { id: "doing", label: "Doing", icon: "loader-circle" },
+  { id: "review", label: "Review", icon: "eye" },
   { id: "done", label: "Done", icon: "circle-check" }
 ];
 const priorities: TaskPriority[] = ["P0", "P1", "P2", "P3", "P4"];
@@ -4126,6 +4129,7 @@ function hydrateIcons() {
       ChevronDown,
       CircleCheck,
       Copy,
+      Eye,
       Folder,
       FolderOpen,
       FolderPlus,

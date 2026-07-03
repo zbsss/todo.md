@@ -1,0 +1,4 @@
+interface:
+  display_name: "todo.md Tasks"
+  short_description: "Coordinate todo.md task files and Codex agent metadata."
+  default_prompt: "Use this skill when working with todo.md .tasks tickets, Codex thread assignment, or PR metadata."

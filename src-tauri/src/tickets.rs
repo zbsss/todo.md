@@ -88,6 +88,7 @@ pub(crate) fn write_ticket(project_dir: &Path, mut ticket: Ticket) -> Result<Tic
         ticket.id = slugify(&ticket.id);
     }
 
+    ticket.status = normalize_status(&ticket.status).unwrap_or_else(|| "draft".to_string());
     ticket.rank = clean_rank(&ticket.rank).unwrap_or_else(initial_rank);
 
     ticket.pr_link = ticket
@@ -335,10 +336,22 @@ pub(crate) fn unique_ticket_id_from_base(project_dir: &Path, base: &str) -> Stri
 }
 
 pub(crate) fn validate_status(status: &str) -> Result<(), String> {
-    if STATUSES.contains(&status) {
+    if normalize_status(status).as_deref() == Some(status) {
         Ok(())
     } else {
         Err("Invalid ticket status.".into())
+    }
+}
+
+pub(crate) fn normalize_status(status: &str) -> Option<String> {
+    if status == "todo" {
+        return Some("draft".to_string());
+    }
+
+    if STATUSES.contains(&status) {
+        Some(status.to_string())
+    } else {
+        None
     }
 }
 
@@ -401,9 +414,8 @@ fn parse_ticket_file(path: &Path) -> Result<Ticket, String> {
         .unwrap_or_else(|| slugify(file_stem));
     let status = frontmatter
         .get("status")
-        .cloned()
-        .filter(|value| validate_status(value).is_ok())
-        .unwrap_or_else(|| "todo".to_string());
+        .and_then(|value| normalize_status(value))
+        .unwrap_or_else(|| "draft".to_string());
     let title = frontmatter
         .get("title")
         .cloned()

@@ -19,9 +19,9 @@ use crate::{
     },
     text::now_millis,
     tickets::{
-        apply_ticket_positions, count_markdown_files, list_tickets_from_disk, rank_between,
-        rank_from_legacy_order, read_ticket, split_frontmatter, unique_ticket_id_from_base,
-        write_ticket,
+        apply_ticket_positions, count_markdown_files, list_tickets_from_disk, normalize_status,
+        rank_between, rank_from_legacy_order, read_ticket, split_frontmatter,
+        unique_ticket_id_from_base, validate_status, write_ticket,
     },
 };
 
@@ -63,6 +63,39 @@ fn split_frontmatter_ignores_missing_or_misplaced_delimiters() {
     let (frontmatter, body) = split_frontmatter(not_at_start);
     assert!(frontmatter.is_empty());
     assert_eq!(body, not_at_start);
+}
+
+#[test]
+fn statuses_support_agent_workflow_and_normalize_legacy_todo() {
+    for status in ["draft", "ready", "doing", "review", "done"] {
+        assert!(validate_status(status).is_ok());
+        assert_eq!(normalize_status(status), Some(status.to_string()));
+    }
+
+    assert_eq!(normalize_status("todo"), Some("draft".to_string()));
+    assert!(validate_status("todo").is_err());
+    assert!(validate_status("missing").is_err());
+}
+
+#[test]
+fn legacy_todo_status_reads_and_writes_as_draft() {
+    let dir = temp_project_dir("legacy-todo-status");
+    let ticket_path = dir.join("legacy-ticket.md");
+    fs::write(
+        &ticket_path,
+        "---\nid: legacy-ticket\ntitle: Legacy ticket\nstatus: todo\ncreated_at: 1\nupdated_at: 1\n---\n\nBody",
+    )
+    .expect("write legacy todo ticket");
+
+    let ticket = read_ticket(&dir, "legacy-ticket").expect("read legacy ticket");
+    assert_eq!(ticket.status, "draft");
+
+    write_ticket(&dir, ticket).expect("write normalized ticket");
+    let contents = fs::read_to_string(ticket_path).expect("read normalized ticket");
+    assert!(contents.contains("\nstatus: draft\n"));
+    assert!(!contents.contains("\nstatus: todo\n"));
+
+    fs::remove_dir_all(dir).expect("cleanup");
 }
 
 #[test]
@@ -168,7 +201,7 @@ fn write_ticket_cleans_titles_and_uses_untitled_fallback() {
             id: "clean-title".to_string(),
             title: "  Plan\r\n   work\t now  ".to_string(),
             body: "Body\n\n".to_string(),
-            status: "todo".to_string(),
+            status: "draft".to_string(),
             rank: rank_between(None, None).expect("initial rank"),
             created_at: 1,
             updated_at: 1,
@@ -191,7 +224,7 @@ fn write_ticket_cleans_titles_and_uses_untitled_fallback() {
             id: "untitled-title".to_string(),
             title: " \n\t ".to_string(),
             body: String::new(),
-            status: "todo".to_string(),
+            status: "draft".to_string(),
             rank: rank_between(None, None).expect("initial rank"),
             created_at: 1,
             updated_at: 1,
@@ -222,7 +255,7 @@ fn applying_ticket_positions_only_rewrites_changed_tickets() {
             id: "first".to_string(),
             title: "First".to_string(),
             body: "First body".to_string(),
-            status: "todo".to_string(),
+            status: "draft".to_string(),
             rank: first_rank.clone(),
             created_at: 1,
             updated_at: 1,
@@ -240,7 +273,7 @@ fn applying_ticket_positions_only_rewrites_changed_tickets() {
             id: "second".to_string(),
             title: "Second".to_string(),
             body: "Second body".to_string(),
-            status: "todo".to_string(),
+            status: "draft".to_string(),
             rank: second_rank.clone(),
             created_at: 1,
             updated_at: 1,
@@ -260,12 +293,12 @@ fn applying_ticket_positions_only_rewrites_changed_tickets() {
         vec![
             TicketPosition {
                 id: "first".to_string(),
-                status: "todo".to_string(),
+                status: "draft".to_string(),
                 rank: first_rank.clone(),
             },
             TicketPosition {
                 id: "second".to_string(),
-                status: "todo".to_string(),
+                status: "draft".to_string(),
                 rank: second_rank.clone(),
             },
         ],
@@ -286,7 +319,7 @@ fn applying_ticket_positions_only_rewrites_changed_tickets() {
         &dir,
         vec![TicketPosition {
             id: "second".to_string(),
-            status: "todo".to_string(),
+            status: "draft".to_string(),
             rank: moved_rank.clone(),
         }],
     )
@@ -357,7 +390,7 @@ fn tasks_directory_is_used_for_ticket_storage_when_present() {
             id: "planned-work".to_string(),
             title: "Planned work".to_string(),
             body: "Stored away from the imported folder root.".to_string(),
-            status: "todo".to_string(),
+            status: "draft".to_string(),
             rank: rank_between(None, None).expect("initial rank"),
             created_at: 1,
             updated_at: 1,
@@ -394,7 +427,7 @@ fn preexisting_empty_tasks_directory_remains_ticket_storage() {
             id: "first-ticket".to_string(),
             title: "First ticket".to_string(),
             body: "Body".to_string(),
-            status: "todo".to_string(),
+            status: "draft".to_string(),
             rank: rank_between(None, None).expect("initial rank"),
             created_at: 1,
             updated_at: 1,
@@ -441,7 +474,7 @@ fn unrelated_nonempty_tasks_directory_does_not_replace_root_ticket_storage() {
             id: "new-root-ticket".to_string(),
             title: "New root ticket".to_string(),
             body: "Body".to_string(),
-            status: "todo".to_string(),
+            status: "draft".to_string(),
             rank: rank_between(None, None).expect("initial rank"),
             created_at: 1,
             updated_at: 1,
@@ -471,7 +504,7 @@ fn pasted_ticket_images_are_stored_under_tasks_images() {
             id: "planned-work".to_string(),
             title: "Planned work".to_string(),
             body: "Body".to_string(),
-            status: "todo".to_string(),
+            status: "draft".to_string(),
             rank: rank_between(None, None).expect("initial rank"),
             created_at: 1,
             updated_at: 1,
@@ -516,7 +549,7 @@ fn pasted_ticket_images_accept_mime_parameters() {
             id: "planned-work".to_string(),
             title: "Planned work".to_string(),
             body: "Body".to_string(),
-            status: "todo".to_string(),
+            status: "draft".to_string(),
             rank: rank_between(None, None).expect("initial rank"),
             created_at: 1,
             updated_at: 1,
@@ -630,7 +663,7 @@ fn pasted_ticket_images_can_be_deleted_by_markdown_path() {
             id: "planned-work".to_string(),
             title: "Planned work".to_string(),
             body: "Body".to_string(),
-            status: "todo".to_string(),
+            status: "draft".to_string(),
             rank: rank_between(None, None).expect("initial rank"),
             created_at: 1,
             updated_at: 1,
