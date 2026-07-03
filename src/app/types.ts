@@ -1,4 +1,4 @@
-export type Status = "todo" | "doing" | "done";
+export type Status = "draft" | "ready" | "doing" | "review" | "done";
 
 export type TaskPriority = "P0" | "P1" | "P2" | "P3" | "P4";
 

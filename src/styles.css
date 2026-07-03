@@ -531,7 +531,7 @@ select:focus {
 .board {
   display: grid;
   min-height: 0;
-  grid-template-columns: repeat(3, minmax(230px, 1fr));
+  grid-template-columns: repeat(5, minmax(230px, 1fr));
   gap: 14px;
   overflow: auto;
 }
@@ -873,8 +873,16 @@ select:focus {
   box-shadow: inset 0 0 0 1px var(--line);
 }
 
+.column[data-status="ready"] .column-icon {
+  color: var(--accent-strong);
+}
+
 .column[data-status="doing"] .column-icon {
   color: var(--gold);
+}
+
+.column[data-status="review"] .column-icon {
+  color: var(--rose);
 }
 
 .column[data-status="done"] .column-icon {
@@ -1618,6 +1626,16 @@ select:focus {
 .status-icon-doing {
   background: rgba(195, 131, 47, 0.13);
   color: var(--gold);
+}
+
+.status-icon-ready {
+  background: rgba(35, 108, 90, 0.13);
+  color: var(--accent-strong);
+}
+
+.status-icon-review {
+  background: rgba(189, 75, 75, 0.12);
+  color: var(--rose);
 }
 
 .status-icon-done {

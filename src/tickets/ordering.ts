@@ -1,6 +1,6 @@
 import type { Status, Ticket } from "../app/types";
 
-export const orderedStatuses: Status[] = ["todo", "doing", "done"];
+export const orderedStatuses: Status[] = ["draft", "ready", "doing", "review", "done"];
 const rankAlphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 const minRankDigit = rankAlphabet[0];
 
@@ -47,6 +47,14 @@ export function sortTickets(a: Ticket, b: Ticket) {
 
 export function statusIndex(status: Status) {
   return orderedStatuses.indexOf(status);
+}
+
+export function normalizeStatus(value: string | undefined): Status {
+  if (value === "todo") {
+    return "draft";
+  }
+
+  return orderedStatuses.includes(value as Status) ? (value as Status) : "draft";
 }
 
 export function rankBetween(previousRank?: string, nextRank?: string) {

@@ -1,4 +1,4 @@
-pub(crate) const STATUSES: [&str; 3] = ["todo", "doing", "done"];
+pub(crate) const STATUSES: [&str; 5] = ["draft", "ready", "doing", "review", "done"];
 pub(crate) const TASKS_DIR: &str = ".tasks";
 pub(crate) const TASKS_STORAGE_MARKER: &str = ".todo-md-storage";
 pub(crate) const MAX_IMAGE_BYTES: usize = 25 * 1024 * 1024;

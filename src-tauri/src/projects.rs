@@ -93,13 +93,25 @@ pub(crate) fn seed_project(project_dir: &Path) -> Result<(), String> {
         (
             "Capture app ideas",
             "Use Markdown for notes, links, and quick checklists.\n\n- Keep tickets portable\n- Make project folders easy to inspect",
-            "todo",
+            "draft",
+            rank_between(None, None)?,
+        ),
+        (
+            "Prep AI-ready ticket",
+            "Move well-scoped work into Ready when an agent can pick it up.",
+            "ready",
             rank_between(None, None)?,
         ),
         (
             "Sketch board columns",
-            "Columns are intentionally small for now:\n\n- To do\n- Doing\n- Done",
+            "Columns track the agent workflow:\n\n- Draft\n- Ready\n- Doing\n- Review\n- Done",
             "doing",
+            rank_between(None, None)?,
+        ),
+        (
+            "Review agent PR",
+            "A PR is open and waiting for human review.",
+            "review",
             rank_between(None, None)?,
         ),
         (

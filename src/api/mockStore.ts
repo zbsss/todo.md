@@ -8,7 +8,7 @@ import type {
   TicketDraft
 } from "../app/types";
 import { bytesToDataUrl, imageExtensionForMime } from "../markdown/images";
-import { rankBetween, rankFromLegacyOrder } from "../tickets/ordering";
+import { normalizeStatus, rankBetween, rankFromLegacyOrder } from "../tickets/ordering";
 
 const mockStorageKey = "todo.md-demo";
 
@@ -28,7 +28,7 @@ export function createMockStore() {
       id: "inbox",
       name: "Inbox",
       path: "~/todo.md/projects/inbox",
-      ticketCount: 3
+      ticketCount: 5
     };
 
     return {
@@ -42,7 +42,7 @@ export function createMockStore() {
             id: "capture-app-ideas",
             title: "Capture app ideas",
             body: "Use **Markdown** for notes, links, and checklists.\n\n- Keep tickets portable\n- Make project folders easy to inspect",
-            status: "todo",
+            status: "draft",
             rank: rankBetween(),
             createdAt: now,
             updatedAt: now,
@@ -51,9 +51,21 @@ export function createMockStore() {
             size: "M"
           },
           {
+            id: "prep-ai-ready-ticket",
+            title: "Prep AI-ready ticket",
+            body: "Move well-scoped work into Ready when an agent can pick it up.",
+            status: "ready",
+            rank: rankBetween(),
+            createdAt: now,
+            updatedAt: now,
+            filePath: "~/todo.md/projects/inbox/prep-ai-ready-ticket.md",
+            priority: "P1",
+            size: "S"
+          },
+          {
             id: "sketch-board-columns",
             title: "Sketch board columns",
-            body: "Columns are intentionally small for now:\n\n- To do\n- Doing\n- Done",
+            body: "Columns track the agent workflow:\n\n- Draft\n- Ready\n- Doing\n- Review\n- Done",
             status: "doing",
             rank: rankBetween(),
             createdAt: now,
@@ -63,6 +75,20 @@ export function createMockStore() {
             size: "S",
             prLink: "https://github.com/zbsss/todo.md/pull/22",
             assignee: "codex://threads/019f239d-dd6d-7451-856c-3847cadaf912"
+          },
+          {
+            id: "review-agent-pr",
+            title: "Review agent PR",
+            body: "A PR is open and waiting for human review.",
+            status: "review",
+            rank: rankBetween(),
+            createdAt: now,
+            updatedAt: now,
+            filePath: "~/todo.md/projects/inbox/review-agent-pr.md",
+            priority: "P2",
+            size: "M",
+            prLink: "https://github.com/zbsss/todo.md/pull/23",
+            assignee: "codex://threads/019f239d-dd6d-7451-856c-3847cadaf913"
           },
           {
             id: "keep-tickets-local",
@@ -356,6 +382,7 @@ function normalizeStore(store: MockStore) {
 
         return {
           ...ticketWithoutTags,
+          status: normalizeStatus(ticket.status as string | undefined),
           priority: isTaskPriority(ticket.priority) ? ticket.priority : undefined,
           size: isTaskSize(ticket.size) ? ticket.size : undefined,
           rank: ticket.rank ?? rankFromLegacyOrder(order ?? 0, ticket.title, ticket.filePath)

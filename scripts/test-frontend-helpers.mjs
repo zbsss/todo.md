@@ -51,7 +51,7 @@ function ticket(overrides) {
     id: overrides.id,
     title: overrides.title ?? overrides.id,
     body: "",
-    status: overrides.status ?? "todo",
+    status: overrides.status ?? "draft",
     rank: overrides.rank ?? "V",
     createdAt: 1,
     updatedAt: 1,
@@ -63,17 +63,21 @@ function ticket(overrides) {
 test("sortTickets orders by board column, rank, then title", () => {
   const tickets = [
     ticket({ id: "done", status: "done", rank: "V" }),
+    ticket({ id: "review", status: "review", rank: "V" }),
     ticket({ id: "doing", status: "doing", rank: "V" }),
-    ticket({ id: "todo-c", status: "todo", rank: "l" }),
-    ticket({ id: "todo-b", title: "B", status: "todo", rank: "V" }),
-    ticket({ id: "todo-a", title: "A", status: "todo", rank: "V" })
+    ticket({ id: "ready", status: "ready", rank: "V" }),
+    ticket({ id: "draft-c", status: "draft", rank: "l" }),
+    ticket({ id: "draft-b", title: "B", status: "draft", rank: "V" }),
+    ticket({ id: "draft-a", title: "A", status: "draft", rank: "V" })
   ];
 
   assert.deepEqual(tickets.sort(ordering.sortTickets).map((item) => item.id), [
-    "todo-a",
-    "todo-b",
-    "todo-c",
+    "draft-a",
+    "draft-b",
+    "draft-c",
+    "ready",
     "doing",
+    "review",
     "done"
   ]);
 });
@@ -81,12 +85,12 @@ test("sortTickets orders by board column, rank, then title", () => {
 test("insertTicket inserts before the requested ticket in the target status", () => {
   const existing = [
     ticket({ id: "done", status: "done", rank: "V" }),
-    ticket({ id: "todo-b", status: "todo", rank: "l" }),
-    ticket({ id: "todo-a", status: "todo", rank: "V" })
+    ticket({ id: "draft-b", status: "draft", rank: "l" }),
+    ticket({ id: "draft-a", status: "draft", rank: "V" })
   ];
-  const inserted = ordering.insertTicket(existing, ticket({ id: "todo-new", status: "todo" }), "todo", "todo-b");
+  const inserted = ordering.insertTicket(existing, ticket({ id: "draft-new", status: "draft" }), "draft", "draft-b");
 
-  assert.deepEqual(inserted.map((item) => item.id), ["todo-a", "todo-new", "todo-b", "done"]);
+  assert.deepEqual(inserted.map((item) => item.id), ["draft-a", "draft-new", "draft-b", "done"]);
 });
 
 test("rankBetween creates sortable ranks between neighbors", () => {
@@ -101,21 +105,21 @@ test("rankBetween creates sortable ranks between neighbors", () => {
 
 test("rankForInsertion reuses the current rank when placement is unchanged", () => {
   const tickets = [
-    ticket({ id: "todo-a", rank: "V" }),
-    ticket({ id: "todo-b", rank: "l" }),
-    ticket({ id: "todo-c", rank: "t" })
+    ticket({ id: "draft-a", rank: "V" }),
+    ticket({ id: "draft-b", rank: "l" }),
+    ticket({ id: "draft-c", rank: "t" })
   ];
 
-  assert.equal(ordering.rankForInsertion(tickets, "todo-b", "todo"), "l");
+  assert.equal(ordering.rankForInsertion(tickets, "draft-b", "draft"), "l");
 });
 
 test("rankForInsertion creates a rank for the moved ticket without changing neighbors", () => {
   const tickets = [
-    ticket({ id: "todo-a", rank: "V" }),
-    ticket({ id: "todo-new", rank: "z" }),
-    ticket({ id: "todo-b", rank: "l" })
+    ticket({ id: "draft-a", rank: "V" }),
+    ticket({ id: "draft-new", rank: "z" }),
+    ticket({ id: "draft-b", rank: "l" })
   ];
-  const rank = ordering.rankForInsertion(tickets, "todo-new", "todo");
+  const rank = ordering.rankForInsertion(tickets, "draft-new", "draft");
 
   assert.equal("V" < rank && rank < "l", true);
   assert.deepEqual(tickets.map((item) => item.rank), ["V", "z", "l"]);
@@ -139,19 +143,27 @@ test("rankFromLegacyOrder creates stable tie-breakers for duplicate orders", () 
 test("sortTicketsForTable defaults to status then priority", () => {
   const tickets = [
     ticket({ id: "done-p0", status: "done", priority: "P0" }),
-    ticket({ id: "todo-p3", status: "todo", priority: "P3" }),
-    ticket({ id: "todo-none", status: "todo" }),
-    ticket({ id: "todo-p0", status: "todo", priority: "P0" }),
+    ticket({ id: "draft-p3", status: "draft", priority: "P3" }),
+    ticket({ id: "draft-none", status: "draft" }),
+    ticket({ id: "draft-p0", status: "draft", priority: "P0" }),
+    ticket({ id: "ready-p2", status: "ready", priority: "P2" }),
     ticket({ id: "doing-p1", status: "doing", priority: "P1" })
   ];
 
   assert.deepEqual(table.sortTicketsForTable(tickets, null).map((item) => item.id), [
-    "todo-p0",
-    "todo-p3",
-    "todo-none",
+    "draft-p0",
+    "draft-p3",
+    "draft-none",
+    "ready-p2",
     "doing-p1",
     "done-p0"
   ]);
+});
+
+test("normalizeStatus maps legacy todo to draft", () => {
+  assert.equal(ordering.normalizeStatus("todo"), "draft");
+  assert.equal(ordering.normalizeStatus("ready"), "ready");
+  assert.equal(ordering.normalizeStatus("missing"), "draft");
 });
 
 test("sortTicketsForTable sorts by an explicit table column", () => {
