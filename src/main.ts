@@ -409,7 +409,6 @@ function render(options: RenderOptions = {}) {
           <div>
             <p class="eyebrow">Project</p>
             <h2>${escapeHtml(currentProject?.name ?? "No project")}</h2>
-            <p class="project-path">${escapeHtml(currentProject?.path ?? "Create a project to begin")}</p>
           </div>
           <div class="topbar-actions">
             ${renderTicketSearchControl()}
@@ -506,7 +505,7 @@ function renderTicketSearchControl() {
   const countText = ticketSearchCountText();
 
   return `
-    <div class="ticket-search ${isActive ? "is-active" : ""} ${state.searchPending ? "is-pending" : ""}" role="search">
+    <div class="ticket-search ${isActive ? "is-active" : ""} ${state.searchPending ? "is-pending" : ""} ${state.searchQuery ? "has-query" : ""}" role="search">
       <span class="ticket-search-icon">${icon("search")}</span>
       <input
         data-search-input
@@ -3654,6 +3653,7 @@ function updateTicketSearchControl() {
 
   container?.classList.toggle("is-active", hasActiveTicketSearch());
   container?.classList.toggle("is-pending", state.searchPending);
+  container?.classList.toggle("has-query", state.searchQuery.length > 0);
 
   if (input && input.value !== state.searchQuery) {
     input.value = state.searchQuery;

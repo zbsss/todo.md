@@ -122,7 +122,6 @@ button {
 }
 
 .brand p,
-.project-path,
 .editor-footer p {
   display: block;
   max-width: 100%;
@@ -445,7 +444,7 @@ select:focus {
   width: min(360px, 34vw);
   min-width: 240px;
   height: 38px;
-  grid-template-columns: 20px minmax(0, 1fr) auto 28px;
+  grid-template-columns: 20px minmax(0, 1fr);
   align-items: center;
   gap: 5px;
   border: 1px solid var(--line);
@@ -457,6 +456,10 @@ select:focus {
     border-color 120ms ease,
     box-shadow 120ms ease,
     background 120ms ease;
+}
+
+.ticket-search.has-query {
+  grid-template-columns: 20px minmax(0, 1fr) auto 28px;
 }
 
 .ticket-search:focus-within,
@@ -503,6 +506,10 @@ select:focus {
   background: transparent;
   color: var(--muted);
   padding: 0;
+}
+
+.ticket-search-clear[hidden] {
+  display: none;
 }
 
 .ticket-search-clear:hover,
