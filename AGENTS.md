@@ -10,6 +10,6 @@ If you're given a task from `.tasks` folder to work on you MUST read task descri
 
 If you're working in a Git workspace run `git worktree list` to find the `main` workspace path. When changing ticket status or metadata, do it in the `main` workspace, not in the agent workspace.
 
-When you start working on a task, update the `status` to `doing`, and add your Codex thread deep link to the `assignee` field.
+When you start working on a task, update the `status` to `doing`, and add your Codex thread deep link to the `assignee` field such as `codex://threads/<thread-id>`
 
 If you have a pull request that implements the task, add the link in the `pr_link` field.

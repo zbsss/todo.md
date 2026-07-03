@@ -2,9 +2,11 @@
 id: 1782685922060-add-search-feature
 title: Design search feature
 status: todo
-order: 11000
+rank: 2
 created_at: 1782685922060
-updated_at: 1783023876189
+updated_at: 1783038666919
+priority: P1
+size: XL
 ---
 
 - We want to allow to search tasks in project. When typing, the tasks should be filtered out live from the board, and the matched text shoud be highlighted (even if it's deep in the description of the task, it should show up highlighted below the title). It should use full text search, including title, description, and metadata of the task.

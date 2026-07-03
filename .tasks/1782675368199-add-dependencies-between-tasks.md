@@ -2,9 +2,11 @@
 id: 1782675368199-add-dependencies-between-tasks
 title: Add dependencies between tasks
 status: todo
-rank: F
+rank: 4
 created_at: 1782675368200
-updated_at: 1783026619738
+updated_at: 1783035526766
+priority: P1
+size: L
 ---
 
 blocked, dependencies etc
