@@ -35,7 +35,8 @@ execFileSync(
     resolve(repoRoot, "src/tickets/table.ts"),
     resolve(repoRoot, "src/markdown/render.ts"),
     resolve(repoRoot, "src/markdown/title.ts"),
-    resolve(repoRoot, "src/markdown/images.ts")
+    resolve(repoRoot, "src/markdown/images.ts"),
+    resolve(repoRoot, "src/quickAddTextarea.ts")
   ],
   { stdio: "inherit" }
 );
@@ -45,6 +46,7 @@ const table = await import(pathToFileURL(join(outDir, "tickets/table.js")).href)
 const markdown = await import(pathToFileURL(join(outDir, "markdown/render.js")).href);
 const title = await import(pathToFileURL(join(outDir, "markdown/title.js")).href);
 const images = await import(pathToFileURL(join(outDir, "markdown/images.js")).href);
+const quickAddTextarea = await import(pathToFileURL(join(outDir, "quickAddTextarea.js")).href);
 
 function ticket(overrides) {
   return {
@@ -247,4 +249,15 @@ test("image helpers normalize task image paths and reject path traversal", () =>
   assert.equal(images.resolveMarkdownImageSrc("images/a.png", "C:\\Project", (path) => path), "C:\\Project\\.tasks\\images\\a.png");
   assert.equal(images.imageExtensionForMime("image/jpeg; charset=binary"), "jpg");
   assert.equal(images.imageExtensionForMime("application/pdf"), null);
+});
+
+test("quick-add textarea expands to its content height", () => {
+  const textarea = {
+    scrollHeight: 92,
+    style: { height: "38px" }
+  };
+
+  quickAddTextarea.resizeAutosizeTextarea(textarea);
+
+  assert.equal(textarea.style.height, "92px");
 });
