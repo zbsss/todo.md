@@ -38,6 +38,7 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Table2,
   Trash2,
   X
 } from "lucide";
@@ -71,6 +72,12 @@ import {
   untitledTicketTitle
 } from "./markdown/title";
 import { insertTicket, rankForInsertion, sortTickets } from "./tickets/ordering";
+import {
+  defaultTableSorts,
+  sortTicketsForTable,
+  type TableColumn,
+  type TableSort
+} from "./tickets/table";
 import "./styles.css";
 const columns: Array<{ id: Status; label: string; icon: string }> = [
   { id: "todo", label: "To do", icon: "list-todo" },
@@ -94,6 +101,13 @@ const appRoot = app;
 const ticketDragType = "application/x-todo-md-ticket";
 const projectDragType = "application/x-todo-md-project";
 const maxPastedImageBytes = 25 * 1024 * 1024;
+const projectViewModeStorageKey = "todo.md.project-view-modes";
+
+type ProjectViewMode = "board" | "table";
+
+type ProjectTableState = {
+  sort: TableSort | null;
+};
 
 const state: {
   workspace: WorkspaceInfo | null;
@@ -110,6 +124,8 @@ const state: {
   isLoading: boolean;
   error: string | null;
   draftSaveError: string | null;
+  projectViewModes: Record<string, ProjectViewMode>;
+  projectTableStates: Record<string, ProjectTableState>;
 } = {
   workspace: null,
   selectedProjectId: null,
@@ -124,7 +140,9 @@ const state: {
   renamingProjectName: "",
   isLoading: true,
   error: null,
-  draftSaveError: null
+  draftSaveError: null,
+  projectViewModes: readProjectViewModes(),
+  projectTableStates: {}
 };
 
 const runtime = detectAppRuntime();
@@ -242,10 +260,13 @@ function render(options: RenderOptions = {}) {
             <h2>${escapeHtml(currentProject?.name ?? "No project")}</h2>
             <p class="project-path">${escapeHtml(currentProject?.path ?? "Create a project to begin")}</p>
           </div>
-          <button class="ghost-button" data-action="refresh" title="Refresh board">
-            ${icon("refresh-cw")}
-            <span>Refresh</span>
-          </button>
+          <div class="topbar-actions">
+            ${renderViewSwitcher()}
+            <button class="ghost-button" data-action="refresh" title="Refresh board">
+              ${icon("refresh-cw")}
+              <span>Refresh</span>
+            </button>
+          </div>
         </header>
 
         ${state.error ? `<div class="notice">${escapeHtml(state.error)}</div>` : ""}
@@ -294,6 +315,37 @@ function renderProjects(projects: ProjectSummary[]) {
       `;
     })
     .join("");
+}
+
+function renderViewSwitcher() {
+  const viewMode = currentProjectViewMode();
+
+  return `
+    <div class="view-switcher" role="group" aria-label="Project view">
+      <button
+        type="button"
+        class="view-switcher-button ${viewMode === "board" ? "active" : ""}"
+        data-action="set-project-view"
+        data-view-mode="board"
+        aria-pressed="${viewMode === "board"}"
+        title="Board view"
+      >
+        ${icon("list-todo")}
+        <span>Board</span>
+      </button>
+      <button
+        type="button"
+        class="view-switcher-button ${viewMode === "table" ? "active" : ""}"
+        data-action="set-project-view"
+        data-view-mode="table"
+        aria-pressed="${viewMode === "table"}"
+        title="Table view"
+      >
+        ${icon("table-2")}
+        <span>Table</span>
+      </button>
+    </div>
+  `;
 }
 
 function renderProjectMenu() {
@@ -434,6 +486,14 @@ function renderBoard() {
     `;
   }
 
+  if (currentProjectViewMode() === "table") {
+    return renderTableView();
+  }
+
+  return renderKanbanBoard();
+}
+
+function renderKanbanBoard() {
   return `
     <div class="board" aria-label="Task board">
       ${columns.map(renderColumn).join("")}
@@ -442,6 +502,33 @@ function renderBoard() {
 }
 
 function renderLoadingBoard() {
+  if (state.selectedProjectId && currentProjectViewMode() === "table") {
+    return `
+      <div class="table-view">
+        <div class="task-table-scroll">
+          <table class="task-table" aria-label="Loading task table">
+            <thead>
+              <tr>
+                ${tableColumnConfigs().map((column) => `<th scope="col">${escapeHtml(column.label)}</th>`).join("")}
+              </tr>
+            </thead>
+            <tbody>
+              ${Array.from({ length: 5 })
+                .map(
+                  () => `
+                    <tr>
+                      ${tableColumnConfigs().map(() => `<td><div class="skeleton table-cell-skeleton"></div></td>`).join("")}
+                    </tr>
+                  `
+                )
+                .join("")}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+
   return `
     <div class="board">
       ${columns
@@ -484,6 +571,173 @@ function renderColumn(column: { id: Status; label: string; icon: string }) {
         </button>
       </form>
     </section>
+  `;
+}
+
+function renderTableView() {
+  const tickets = tableTickets();
+  const tableState = currentProjectTableState();
+
+  return `
+    <div class="table-view" aria-label="Task table">
+      <div class="task-table-scroll">
+        <table class="task-table">
+          <thead>
+            <tr>
+              ${tableColumnConfigs().map((column) => renderTableHeaderCell(column, tableState.sort)).join("")}
+            </tr>
+          </thead>
+          <tbody>
+            ${tickets.length ? tickets.map((ticket) => renderTableRow(ticket)).join("") : renderEmptyTableRow()}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function tableColumnConfigs(): Array<{ id: TableColumn; label: string }> {
+  return [
+    { id: "title", label: "Title" },
+    { id: "status", label: "Status" },
+    { id: "priority", label: "Priority" },
+    { id: "size", label: "Size" },
+    { id: "assignee", label: "Assignee" },
+    { id: "pr", label: "PR" }
+  ];
+}
+
+function renderTableHeaderCell(column: { id: TableColumn; label: string }, sort: TableSort | null) {
+  const defaultSortIndex = sort ? -1 : defaultTableSortIndex(column.id);
+  const isActive = sort?.column === column.id || defaultSortIndex >= 0;
+  const direction = sort?.column === column.id ? sort.direction : "asc";
+  const isPrimarySort = sort ? sort.column === column.id : defaultSortIndex === 0;
+  const ariaSort = isPrimarySort ? (direction === "asc" ? "ascending" : "descending") : "none";
+
+  return `
+    <th scope="col" class="task-table-heading task-table-heading-${column.id}" aria-sort="${ariaSort}">
+      <button
+        type="button"
+        class="table-heading-button ${isActive ? "active" : ""}"
+        data-action="sort-table"
+        data-table-column="${column.id}"
+        title="Sort by ${escapeAttr(column.label)}"
+      >
+        <span>${escapeHtml(column.label)}</span>
+        ${renderTableSortIndicator(isActive, direction, defaultSortIndex)}
+      </button>
+    </th>
+  `;
+}
+
+function renderTableSortIndicator(isActive: boolean, direction: "asc" | "desc", defaultSortIndex: number) {
+  if (!isActive) {
+    return `<span class="table-sort-indicator"></span>`;
+  }
+
+  return `
+    <span class="table-sort-indicator active" aria-hidden="true">
+      ${icon(direction === "asc" ? "arrow-up" : "arrow-down")}
+      ${defaultSortIndex >= 0 ? `<span>${defaultSortIndex + 1}</span>` : ""}
+    </span>
+  `;
+}
+
+function renderTableRow(ticket: Ticket) {
+  const displayTitle = titleDisplayValue(ticket.title);
+
+  return `
+    <tr
+      class="task-table-row"
+      data-ticket-id="${escapeAttr(ticket.id)}"
+      tabindex="0"
+      aria-label="${escapeAttr(ticketCardAriaLabel(ticket))}"
+      aria-keyshortcuts="Enter"
+    >
+      <td class="task-table-cell task-table-title-cell">
+        <button
+          type="button"
+          class="table-title-button"
+          data-action="open-table-ticket"
+          title="${escapeAttr(displayTitle)}"
+        >
+          ${renderTicketTitle(ticket.title)}
+        </button>
+      </td>
+      <td class="task-table-cell task-table-status-cell">
+        ${renderTaskSelector("status", ticket.status, {
+          owner: "table",
+          ticketId: ticket.id,
+          className: "table-selector"
+        })}
+      </td>
+      <td class="task-table-cell task-table-priority-cell">
+        ${renderTaskSelector("priority", ticket.priority, {
+          owner: "table",
+          ticketId: ticket.id,
+          className: "table-selector table-selector-compact"
+        })}
+      </td>
+      <td class="task-table-cell task-table-size-cell">
+        ${renderTaskSelector("size", ticket.size, {
+          owner: "table",
+          ticketId: ticket.id,
+          className: "table-selector table-selector-compact"
+        })}
+      </td>
+      <td class="task-table-cell task-table-assignee-cell">
+        ${renderTableLinkCell(ticket.assignee, "assignee")}
+      </td>
+      <td class="task-table-cell task-table-pr-cell">
+        ${renderTableLinkCell(ticket.prLink, "pr")}
+      </td>
+    </tr>
+  `;
+}
+
+function renderTableLinkCell(value: string | undefined, kind: "assignee" | "pr") {
+  const metadata = metadataValue(value);
+
+  if (!metadata) {
+    return `<span class="table-muted">Empty</span>`;
+  }
+
+  const href = kind === "pr"
+    ? safeMetadataHref(metadata, ["https:", "http:"])
+    : safeMetadataHref(metadata, ["codex:", "https:", "http:"]);
+  const label = kind === "pr" ? formatPullRequestLabel(metadata) : formatAssigneeLabel(metadata);
+
+  if (!href) {
+    return `<span class="table-link-label">${renderTableLinkLabel(kind, label)}</span>`;
+  }
+
+  return `
+    <a class="table-link-label is-link" href="${escapeAttr(href)}" rel="noreferrer" data-table-link>
+      ${renderTableLinkLabel(kind, label)}
+    </a>
+  `;
+}
+
+function renderTableLinkLabel(kind: "assignee" | "pr", label: string) {
+  if (kind !== "assignee") {
+    return escapeHtml(label);
+  }
+
+  return `
+    <span class="table-link-prefix">Codex</span>
+    <span class="table-link-text">${escapeHtml(label)}</span>
+  `;
+}
+
+function renderEmptyTableRow() {
+  return `
+    <tr class="task-table-empty-row">
+      <td colspan="${tableColumnConfigs().length}">
+        <div class="empty-board">
+          <h3>No tasks</h3>
+        </div>
+      </td>
+    </tr>
   `;
 }
 
@@ -777,14 +1031,29 @@ type TaskSelectorOption = {
   icon?: string;
 };
 
-function renderTaskSelector(kind: TaskSelectorKind, value: string | undefined) {
+type RenderTaskSelectorOptions = {
+  owner?: "editor" | "table";
+  ticketId?: string;
+  className?: string;
+};
+
+function renderTaskSelector(kind: TaskSelectorKind, value: string | undefined, options: RenderTaskSelectorOptions = {}) {
   const config = taskSelectorConfig(kind);
   const selected = selectedTaskSelectorOption(kind, value);
   const isCompactCurrentValue = isCompactTaskSelectorCurrentValue(kind);
   const currentLabel = taskSelectorCurrentLabel(kind, selected, config.placeholder);
+  const owner = options.owner ?? "editor";
+  const ticketAttribute = options.ticketId ? ` data-ticket-id="${escapeAttr(options.ticketId)}"` : "";
+  const extraClass = options.className ? ` ${escapeAttr(options.className)}` : "";
 
   return `
-    <div class="status-selector task-selector task-selector-${kind}" data-task-selector data-selector-kind="${kind}">
+    <div
+      class="status-selector task-selector task-selector-${kind}${extraClass}"
+      data-task-selector
+      data-selector-kind="${kind}"
+      data-selector-owner="${owner}"
+      ${ticketAttribute}
+    >
       <button
         type="button"
         class="status-selector-button"
@@ -913,9 +1182,33 @@ function taskSelectorMarkClass(kind: TaskSelectorKind, value: string) {
 
 function bindEvents() {
   bindProjectEvents();
+  bindViewEvents();
   bindTicketEvents();
   bindMetadataEvents();
   bindEditorEvents();
+}
+
+function bindViewEvents() {
+  document.querySelectorAll<HTMLButtonElement>('[data-action="set-project-view"]').forEach((button) => {
+    button.addEventListener("click", () => {
+      const viewMode = button.dataset.viewMode;
+
+      if (viewMode === "board" || viewMode === "table") {
+        setCurrentProjectViewMode(viewMode);
+      }
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>('[data-action="sort-table"]').forEach((button) => {
+    button.addEventListener("click", () => {
+      const column = button.dataset.tableColumn;
+
+      if (isTableColumn(column)) {
+        toggleTableSort(column);
+      }
+    });
+  });
+
 }
 
 function bindProjectEvents() {
@@ -1496,6 +1789,8 @@ function bindTicketEvents() {
     });
   });
 
+  bindTableTicketEvents();
+
   document.querySelectorAll<HTMLElement>(".ticket-card").forEach((card) => {
     card.addEventListener("click", (event) => {
       if ((event.target as HTMLElement).closest("a.ticket-metadata-item")) {
@@ -1628,6 +1923,92 @@ function bindTicketEvents() {
       clearDropIndicators();
       await moveTicket(ticketId, status, beforeId);
     });
+  });
+}
+
+function bindTableTicketEvents() {
+  const table = document.querySelector<HTMLElement>(".task-table");
+
+  table?.addEventListener("click", (event) => {
+    const target = event.target as HTMLElement;
+    const tableLink = target.closest<HTMLAnchorElement>("a[data-table-link]");
+
+    if (tableLink) {
+      event.preventDefault();
+      event.stopPropagation();
+      void openMetadataLink(tableLink.href);
+      return;
+    }
+
+    const clickedTaskSelector = target.closest<HTMLElement>("[data-task-selector]");
+    closeTaskSelectorsExcept(clickedTaskSelector);
+
+    const actionButton = target.closest<HTMLButtonElement>("button[data-action]");
+
+    if (!actionButton?.dataset.action) {
+      return;
+    }
+
+    const action = actionButton.dataset.action;
+
+    if (action === "open-table-ticket") {
+      const ticketId = actionButton.closest<HTMLElement>(".task-table-row")?.dataset.ticketId;
+
+      if (ticketId) {
+        openEditor(ticketId);
+      }
+      return;
+    }
+
+    if (action === "toggle-task-selector") {
+      toggleTaskSelector(actionButton.closest<HTMLElement>("[data-task-selector]"));
+      return;
+    }
+
+    if (action === "choose-task-selector") {
+      void chooseTableSelectorValue(actionButton.dataset.selectorValue, actionButton);
+    }
+  });
+
+  table?.addEventListener("contextmenu", (event) => {
+    const target = event.target as HTMLElement;
+
+    if (target.closest("a[data-table-link]")) {
+      return;
+    }
+
+    const row = target.closest<HTMLElement>(".task-table-row");
+    const ticketId = row?.dataset.ticketId;
+
+    if (!row || !ticketId) {
+      return;
+    }
+
+    event.preventDefault();
+    closeTaskSelector();
+    openTicketMenu(ticketId, event.clientX, event.clientY);
+  });
+
+  document.querySelectorAll<HTMLElement>(".task-table-row").forEach((row) => {
+    row.addEventListener("keydown", (event) => {
+      if (event.target !== row) {
+        return;
+      }
+
+      const ticketId = row.dataset.ticketId;
+
+      if (!ticketId) {
+        return;
+      }
+
+      if (event.key === "Enter") {
+        openEditor(ticketId);
+      }
+    });
+  });
+
+  document.querySelector<HTMLElement>(".task-table-scroll")?.addEventListener("scroll", () => {
+    closeTaskSelector();
   });
 }
 
@@ -2509,6 +2890,14 @@ function findTicketCard(ticketId: string, root: ParentNode = document) {
   );
 }
 
+function findTableRow(ticketId: string, root: ParentNode = document) {
+  return (
+    Array.from(root.querySelectorAll<HTMLElement>(".task-table-row")).find(
+      (row) => row.dataset.ticketId === ticketId
+    ) ?? null
+  );
+}
+
 function findLastTicketCard(root: ParentNode = document) {
   const cards = Array.from(root.querySelectorAll<HTMLElement>(".ticket-card:not(.is-dragging)"));
 
@@ -2516,7 +2905,7 @@ function findLastTicketCard(root: ParentNode = document) {
 }
 
 function focusTicket(ticketId: string) {
-  findTicketCard(ticketId)?.focus();
+  (findTicketCard(ticketId) ?? findTableRow(ticketId))?.focus();
 }
 
 function revealTicketInList(ticketId: string, block: "nearest" | "end" = "nearest") {
@@ -2550,7 +2939,9 @@ function captureScrollSnapshot(): ScrollSnapshot {
     windowX: window.scrollX,
     windowY: window.scrollY,
     elements: Array.from(
-      document.querySelectorAll<HTMLElement>(".project-list, .workspace, .board, .ticket-list[data-status]")
+      document.querySelectorAll<HTMLElement>(
+        ".project-list, .workspace, .board, .task-table-scroll, .ticket-list[data-status]"
+      )
     ).flatMap((element) => {
       const key = scrollSnapshotKey(element);
 
@@ -2605,6 +2996,10 @@ function scrollSnapshotKey(element: HTMLElement) {
     return "board";
   }
 
+  if (element.classList.contains("task-table-scroll")) {
+    return "task-table";
+  }
+
   return null;
 }
 
@@ -2629,6 +3024,10 @@ function scrollSnapshotElement(key: string) {
 
   if (key === "board") {
     return document.querySelector<HTMLElement>(".board");
+  }
+
+  if (key === "task-table") {
+    return document.querySelector<HTMLElement>(".task-table-scroll");
   }
 
   return null;
@@ -2670,6 +3069,92 @@ function updateProjectInWorkspace(workspace: WorkspaceInfo | null, updated: Proj
     ...workspace,
     projects: workspace.projects.map((project) => (project.id === updated.id ? updated : project))
   };
+}
+
+function currentProjectViewMode(): ProjectViewMode {
+  const projectId = state.selectedProjectId;
+
+  return projectId ? state.projectViewModes[projectId] ?? "board" : "board";
+}
+
+function setCurrentProjectViewMode(viewMode: ProjectViewMode) {
+  const projectId = state.selectedProjectId;
+
+  if (!projectId || currentProjectViewMode() === viewMode) {
+    return;
+  }
+
+  state.projectViewModes = {
+    ...state.projectViewModes,
+    [projectId]: viewMode
+  };
+  persistProjectViewModes();
+  render({ preserveScroll: true });
+}
+
+function readProjectViewModes(): Record<string, ProjectViewMode> {
+  try {
+    const raw = localStorage.getItem(projectViewModeStorageKey);
+    const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, ProjectViewMode] =>
+        entry[1] === "board" || entry[1] === "table"
+      )
+    );
+  } catch {
+    return {};
+  }
+}
+
+function persistProjectViewModes() {
+  try {
+    localStorage.setItem(projectViewModeStorageKey, JSON.stringify(state.projectViewModes));
+  } catch {
+    return;
+  }
+}
+
+function currentProjectTableState(): ProjectTableState {
+  const projectId = state.selectedProjectId ?? "__default";
+
+  state.projectTableStates[projectId] ??= {
+    sort: null
+  };
+
+  return state.projectTableStates[projectId];
+}
+
+function tableTickets() {
+  const tableState = currentProjectTableState();
+
+  return sortTicketsForTable(state.tickets, tableState.sort);
+}
+
+function defaultTableSortIndex(column: TableColumn) {
+  return defaultTableSorts.findIndex((sort) => sort.column === column);
+}
+
+function isTableColumn(value: string | undefined): value is TableColumn {
+  return tableColumnConfigs().some((column) => column.id === value);
+}
+
+function toggleTableSort(column: TableColumn) {
+  const tableState = currentProjectTableState();
+  const currentSort = tableState.sort;
+  const defaultIndex = defaultTableSortIndex(column);
+
+  if (!currentSort && defaultIndex >= 0) {
+    tableState.sort = { column, direction: "desc" };
+  } else if (currentSort?.column === column && currentSort.direction === "asc") {
+    tableState.sort = { column, direction: "desc" };
+  } else if (currentSort?.column === column) {
+    tableState.sort = null;
+  } else {
+    tableState.sort = { column, direction: "asc" };
+  }
+
+  render({ preserveScroll: true });
 }
 
 function ticketsFor(status: Status) {
@@ -2751,8 +3236,55 @@ function setTaskSelectorOpen(selector: HTMLElement, isOpen: boolean) {
   selector.querySelector<HTMLButtonElement>(".status-selector-button")?.setAttribute("aria-expanded", String(isOpen));
 
   if (isOpen) {
+    positionTaskSelectorMenu(selector);
     focusSelectedTaskSelectorOption(selector);
+  } else {
+    resetTaskSelectorMenuPosition(selector);
   }
+}
+
+function positionTaskSelectorMenu(selector: HTMLElement) {
+  if (selector.dataset.selectorOwner !== "table") {
+    return;
+  }
+
+  const trigger = selector.querySelector<HTMLElement>(".status-selector-button");
+  const menu = selector.querySelector<HTMLElement>(".status-menu");
+
+  if (!trigger || !menu) {
+    return;
+  }
+
+  const triggerRect = trigger.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const menuWidth = Math.max(menuRect.width, triggerRect.width);
+  const menuHeight = menuRect.height;
+  const left = Math.max(8, Math.min(triggerRect.left, window.innerWidth - menuWidth - 8));
+  const preferredTop = triggerRect.bottom + 7;
+  const top =
+    preferredTop + menuHeight <= window.innerHeight - 8
+      ? preferredTop
+      : Math.max(8, triggerRect.top - menuHeight - 7);
+
+  menu.style.position = "fixed";
+  menu.style.right = "auto";
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  menu.style.width = `${menuWidth}px`;
+}
+
+function resetTaskSelectorMenuPosition(selector: HTMLElement) {
+  const menu = selector.querySelector<HTMLElement>(".status-menu");
+
+  if (!menu) {
+    return;
+  }
+
+  menu.style.removeProperty("position");
+  menu.style.removeProperty("right");
+  menu.style.removeProperty("left");
+  menu.style.removeProperty("top");
+  menu.style.removeProperty("width");
 }
 
 function chooseDraftSelectorValue(value: string | undefined, source: HTMLElement) {
@@ -2772,6 +3304,92 @@ function chooseDraftSelectorValue(value: string | undefined, source: HTMLElement
   updateTaskSelector(selector, kind, selectorValueForKind(kind));
   closeTaskSelector(selector);
   selector?.querySelector<HTMLButtonElement>(".status-selector-button")?.focus();
+}
+
+async function chooseTableSelectorValue(value: string | undefined, source: HTMLElement) {
+  const selector = source.closest<HTMLElement>("[data-task-selector]");
+  const kind = selector?.dataset.selectorKind as TaskSelectorKind | undefined;
+  const ticketId = selector?.dataset.ticketId;
+
+  if (!selector || !isTaskSelectorKind(kind) || !ticketId || !state.selectedProjectId) {
+    return;
+  }
+
+  const projectId = state.selectedProjectId;
+  const previousTickets = state.tickets;
+  const ticket = getTicket(ticketId);
+  const nextTicket = ticket ? ticketWithSelectorValue(ticket, kind, value ?? "") : null;
+
+  if (!ticket || !nextTicket) {
+    closeTaskSelector(selector);
+    selector.querySelector<HTMLButtonElement>(".status-selector-button")?.focus();
+    return;
+  }
+
+  state.tickets = state.tickets.map((candidate) => (candidate.id === nextTicket.id ? nextTicket : candidate));
+  updateTaskSelector(selector, kind, tableSelectorValueForKind(nextTicket, kind));
+  closeTaskSelector(selector);
+  render({ preserveScroll: true });
+  focusTicket(nextTicket.id);
+
+  try {
+    const updated = await api.updateTicket(
+      projectId,
+      nextTicket.id,
+      nextTicket.title,
+      nextTicket.body,
+      nextTicket.status,
+      nextTicket.priority ?? null,
+      nextTicket.size ?? null
+    );
+    state.tickets = state.tickets.map((candidate) => (candidate.id === updated.id ? updated : candidate)).sort(sortTickets);
+    render({ preserveScroll: true });
+    focusTicket(updated.id);
+  } catch (error) {
+    state.tickets = previousTickets;
+    showError(error, { preserveScroll: true });
+    focusTicket(ticketId);
+  }
+}
+
+function ticketWithSelectorValue(ticket: Ticket, kind: TaskSelectorKind, value: string) {
+  if (kind === "status") {
+    if (!isStatus(value) || ticket.status === value) {
+      return null;
+    }
+
+    return { ...ticket, status: value };
+  }
+
+  if (kind === "priority") {
+    const priority = normalizeDraftPriority(value);
+
+    if (ticket.priority === priority) {
+      return null;
+    }
+
+    return { ...ticket, priority };
+  }
+
+  const size = normalizeDraftSize(value);
+
+  if (ticket.size === size) {
+    return null;
+  }
+
+  return { ...ticket, size };
+}
+
+function tableSelectorValueForKind(ticket: Ticket, kind: TaskSelectorKind) {
+  if (kind === "status") {
+    return ticket.status;
+  }
+
+  if (kind === "priority") {
+    return ticket.priority ?? "";
+  }
+
+  return ticket.size ?? "";
 }
 
 function updateDraftSelectorValue(kind: TaskSelectorKind, value: string) {
@@ -2905,11 +3523,22 @@ function handleTaskSelectorKeydown(event: KeyboardEvent, selector: HTMLElement) 
   if ((event.key === "Enter" || event.key === " ") && document.activeElement?.classList.contains("status-option")) {
     event.preventDefault();
     event.stopPropagation();
-    chooseDraftSelectorValue(
+    chooseTaskSelectorValue(
       (document.activeElement as HTMLElement).dataset.selectorValue,
       document.activeElement as HTMLElement
     );
   }
+}
+
+function chooseTaskSelectorValue(value: string | undefined, source: HTMLElement) {
+  const owner = source.closest<HTMLElement>("[data-task-selector]")?.dataset.selectorOwner;
+
+  if (owner === "table") {
+    void chooseTableSelectorValue(value, source);
+    return;
+  }
+
+  chooseDraftSelectorValue(value, source);
 }
 
 function focusSelectedTaskSelectorOption(selector: HTMLElement) {
@@ -3507,6 +4136,7 @@ function hydrateIcons() {
       Plus,
       RefreshCw,
       Save,
+      Table2,
       Trash2,
       X
     }
