@@ -40,6 +40,7 @@ execFileSync(
     resolve(repoRoot, "src/markdown/title.ts"),
     resolve(repoRoot, "src/markdown/images.ts"),
     resolve(repoRoot, "src/tickets/quickAdd.ts"),
+    resolve(repoRoot, "src/projects/ordering.ts"),
     resolve(repoRoot, "src/quickAddTextarea.ts"),
     resolve(repoRoot, "src/settings/appearance.ts")
   ],
@@ -54,6 +55,7 @@ const markdown = await import(pathToFileURL(join(outDir, "markdown/render.js")).
 const title = await import(pathToFileURL(join(outDir, "markdown/title.js")).href);
 const images = await import(pathToFileURL(join(outDir, "markdown/images.js")).href);
 const quickAdd = await import(pathToFileURL(join(outDir, "tickets/quickAdd.js")).href);
+const projectOrdering = await import(pathToFileURL(join(outDir, "projects/ordering.js")).href);
 const quickAddTextarea = await import(pathToFileURL(join(outDir, "quickAddTextarea.js")).href);
 const appearance = await import(pathToFileURL(join(outDir, "settings/appearance.js")).href);
 
@@ -68,6 +70,15 @@ function ticket(overrides) {
     updatedAt: 1,
     filePath: `${overrides.id}.md`,
     ...overrides
+  };
+}
+
+function project(id) {
+  return {
+    id,
+    name: id,
+    path: `/projects/${id}`,
+    ticketCount: 0
   };
 }
 
@@ -175,6 +186,39 @@ test("normalizeStatus maps legacy todo to draft", () => {
   assert.equal(ordering.normalizeStatus("todo"), "draft");
   assert.equal(ordering.normalizeStatus("ready"), "ready");
   assert.equal(ordering.normalizeStatus("missing"), "draft");
+});
+
+test("reorderProjectsForInsertion moves a project before a target", () => {
+  const projects = ["one", "two", "three"].map(project);
+
+  assert.deepEqual(
+    projectOrdering.reorderProjectsForInsertion(projects, "three", "one", "before").map((item) => item.id),
+    ["three", "one", "two"]
+  );
+});
+
+test("reorderProjectsForInsertion moves a project after a target", () => {
+  const projects = ["one", "two", "three"].map(project);
+
+  assert.deepEqual(
+    projectOrdering.reorderProjectsForInsertion(projects, "one", "two", "after").map((item) => item.id),
+    ["two", "one", "three"]
+  );
+});
+
+test("reorderProjectsForInsertion appends a project at the end", () => {
+  const projects = ["one", "two", "three"].map(project);
+
+  assert.deepEqual(
+    projectOrdering.reorderProjectsForInsertion(projects, "one").map((item) => item.id),
+    ["two", "three", "one"]
+  );
+});
+
+test("reorderProjectsForInsertion reuses the current order when placement is unchanged", () => {
+  const projects = ["one", "two", "three"].map(project);
+
+  assert.equal(projectOrdering.reorderProjectsForInsertion(projects, "two", "three", "before"), projects);
 });
 
 test("ticketPathRelativeToProject returns a project-relative ticket path", () => {
