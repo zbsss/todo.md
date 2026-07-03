@@ -98,6 +98,7 @@ import {
   titleDisplayValue,
   untitledTicketTitle
 } from "./markdown/title";
+import { reorderProjectsForInsertion } from "./projects/ordering";
 import { bindQuickAddTextarea } from "./quickAddTextarea";
 import { findTaskSelectorFromTarget } from "./taskSelectorClose";
 import {
@@ -1916,7 +1917,7 @@ function bindProjectEvents() {
     });
 
     button.addEventListener("dragover", (event) => {
-      if (!state.draggingProjectId || state.draggingProjectId === button.dataset.projectId) {
+      if (!state.draggingProjectId) {
         return;
       }
 
@@ -1924,38 +1925,41 @@ function bindProjectEvents() {
       if (event.dataTransfer) {
         event.dataTransfer.dropEffect = "move";
       }
-      button.classList.add("is-project-drag-over");
-    });
+      const list = button.closest<HTMLElement>(".project-list");
 
-    button.addEventListener("dragleave", () => {
-      button.classList.remove("is-project-drag-over");
+      if (list) {
+        updateProjectDropIndicator(list, getProjectInsertionBeforeId(list, event.clientY));
+      }
     });
 
     button.addEventListener("drop", async (event) => {
       event.preventDefault();
-      button.classList.remove("is-project-drag-over");
 
       const projectId = event.dataTransfer?.getData(projectDragType) || state.draggingProjectId;
-      const beforeId = button.dataset.projectId;
+      const list = button.closest<HTMLElement>(".project-list");
+      const beforeId = list ? getProjectInsertionBeforeId(list, event.clientY) : button.dataset.projectId;
 
-      if (!projectId || !beforeId || projectId === beforeId) {
+      if (!projectId || projectId === beforeId) {
         return;
       }
 
-      await reorderProjectBefore(projectId, beforeId);
+      await reorderProject(projectId, beforeId);
     });
 
     button.addEventListener("dragend", () => {
       state.draggingProjectId = null;
+      clearDropIndicators();
       document
-        .querySelectorAll(".is-project-dragging, .is-project-drag-over")
-        .forEach((node) => node.classList.remove("is-project-dragging", "is-project-drag-over"));
+        .querySelectorAll(".is-project-dragging")
+        .forEach((node) => node.classList.remove("is-project-dragging"));
     });
   });
 
   document.querySelector<HTMLElement>(".project-list")?.addEventListener("dragover", (event) => {
     if (state.draggingProjectId) {
       event.preventDefault();
+      const list = event.currentTarget as HTMLElement;
+      updateProjectDropIndicator(list, getProjectInsertionBeforeId(list, event.clientY));
     }
   });
 
@@ -1968,9 +1972,10 @@ function bindProjectEvents() {
 
     event.preventDefault();
     const projectId = event.dataTransfer?.getData(projectDragType) || state.draggingProjectId;
+    const beforeId = getProjectInsertionBeforeId(event.currentTarget as HTMLElement, event.clientY);
 
-    if (projectId) {
-      await reorderProjectBefore(projectId);
+    if (projectId && projectId !== beforeId) {
+      await reorderProject(projectId, beforeId);
     }
   });
 
@@ -2209,27 +2214,69 @@ async function moveProjectBy(projectId: string, delta: -1 | 1) {
   await saveProjectOrder(nextProjects);
 }
 
-async function reorderProjectBefore(projectId: string, beforeId?: string) {
-  if (!state.workspace || projectId === beforeId) {
+async function reorderProject(projectId: string, targetId?: string) {
+  if (!state.workspace || projectId === targetId) {
     return;
   }
 
-  const project = state.workspace.projects.find((candidate) => candidate.id === projectId);
+  const nextProjects = reorderProjectsForInsertion(state.workspace.projects, projectId, targetId);
 
-  if (!project) {
+  if (nextProjects === state.workspace.projects) {
     return;
-  }
-
-  const nextProjects = state.workspace.projects.filter((candidate) => candidate.id !== projectId);
-  const beforeIndex = beforeId ? nextProjects.findIndex((candidate) => candidate.id === beforeId) : -1;
-
-  if (beforeIndex >= 0) {
-    nextProjects.splice(beforeIndex, 0, project);
-  } else {
-    nextProjects.push(project);
   }
 
   await saveProjectOrder(nextProjects);
+}
+
+function getProjectInsertionBeforeId(list: HTMLElement, pointerY: number) {
+  const projects = Array.from(list.querySelectorAll<HTMLElement>(".project-item:not(.is-project-dragging)"));
+
+  for (const project of projects) {
+    const rect = project.getBoundingClientRect();
+
+    if (pointerY < rect.top + rect.height / 2) {
+      return project.dataset.projectId;
+    }
+  }
+
+  return undefined;
+}
+
+function updateProjectDropIndicator(list: HTMLElement, beforeId?: string) {
+  const currentBefore = document.querySelector<HTMLElement>(".project-item.is-drop-before");
+  const currentAfter = document.querySelector<HTMLElement>(".project-item.is-drop-after");
+  const currentEnd = document.querySelector<HTMLElement>(".project-list.is-drop-at-end");
+
+  if (beforeId) {
+    const nextBefore = findProjectItem(beforeId, list);
+
+    if (nextBefore && currentBefore === nextBefore && !currentAfter && !currentEnd) {
+      return;
+    }
+
+    clearDropIndicators();
+    nextBefore?.classList.add("is-drop-before");
+    return;
+  }
+
+  const nextAfter = findLastProjectItem(list);
+
+  if (nextAfter) {
+    if (currentAfter === nextAfter && !currentBefore && !currentEnd) {
+      return;
+    }
+
+    clearDropIndicators();
+    nextAfter.classList.add("is-drop-after");
+    return;
+  }
+
+  if (currentEnd === list && !currentBefore && !currentAfter) {
+    return;
+  }
+
+  clearDropIndicators();
+  list.classList.add("is-drop-at-end");
 }
 
 async function saveProjectOrder(projects: ProjectSummary[]) {
@@ -3516,6 +3563,14 @@ function findTicketCard(ticketId: string, root: ParentNode = document) {
   );
 }
 
+function findProjectItem(projectId: string, root: ParentNode = document) {
+  return (
+    Array.from(root.querySelectorAll<HTMLElement>(".project-item")).find(
+      (project) => project.dataset.projectId === projectId
+    ) ?? null
+  );
+}
+
 function findTableRow(ticketId: string, root: ParentNode = document) {
   return (
     Array.from(root.querySelectorAll<HTMLElement>(".task-table-row")).find(
@@ -3528,6 +3583,12 @@ function findLastTicketCard(root: ParentNode = document) {
   const cards = Array.from(root.querySelectorAll<HTMLElement>(".ticket-card:not(.is-dragging)"));
 
   return cards[cards.length - 1] ?? null;
+}
+
+function findLastProjectItem(root: ParentNode = document) {
+  const projects = Array.from(root.querySelectorAll<HTMLElement>(".project-item:not(.is-project-dragging)"));
+
+  return projects[projects.length - 1] ?? null;
 }
 
 function focusTicket(ticketId: string) {
