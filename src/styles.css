@@ -537,9 +537,9 @@ select:focus {
 }
 
 .table-view {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
-  grid-template-rows: auto minmax(0, 1fr);
   gap: 10px;
   overflow: hidden;
 }
@@ -556,6 +556,7 @@ select:focus {
 }
 
 .task-table-scroll {
+  flex: 0 1 auto;
   min-height: 0;
   overflow: auto;
   border: 1px solid var(--line);
@@ -705,13 +706,18 @@ select:focus {
 
 .task-table-title-cell {
   min-width: 0;
+  overflow: hidden;
 }
 
 .table-title-button {
+  display: block;
+  width: 100%;
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   border: 0;
   background: transparent;
+  box-sizing: border-box;
   color: var(--ink);
   cursor: pointer;
   font-size: 0.9rem;
