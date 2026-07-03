@@ -79,6 +79,7 @@ import {
   type TableColumn,
   type TableSort
 } from "./tickets/table";
+import { shouldCloseTaskSelectorsForPointerTarget } from "./taskSelectorDismiss";
 import "./styles.css";
 const columns: Array<{ id: Status; label: string; icon: string }> = [
   { id: "draft", label: "Draft", icon: "pencil" },
@@ -179,6 +180,7 @@ let ticketDropCleanupFrameId: number | null = null;
 
 async function main() {
   bindGlobalKeys();
+  bindGlobalTaskSelectorDismiss();
   bindLayoutGuards();
   await bindWindowCloseGuards();
   await loadWorkspace();
@@ -2292,6 +2294,14 @@ function bindGlobalKeys() {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s" && state.draft) {
       event.preventDefault();
       void saveDraft({ flush: true });
+    }
+  });
+}
+
+function bindGlobalTaskSelectorDismiss() {
+  document.addEventListener("pointerdown", (event) => {
+    if (shouldCloseTaskSelectorsForPointerTarget(event.target)) {
+      closeTaskSelector();
     }
   });
 }
