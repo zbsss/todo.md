@@ -6,6 +6,7 @@ import type {
   TaskPriority,
   TaskSize,
   Ticket,
+  TicketDependencyRelationship,
   TicketDraft,
   TicketSearchResult,
   WorkspaceInfo
@@ -40,6 +41,13 @@ export type TodoApi = {
     priority: TaskPriority | null,
     size: TaskSize | null
   ): Promise<Ticket>;
+  setTicketDependency(
+    projectId: string,
+    ticketId: string,
+    relatedTicketId: string,
+    relationship: TicketDependencyRelationship,
+    linked: boolean
+  ): Promise<Ticket[]>;
   saveTicketImage(projectId: string, ticketId: string, mimeType: string, bytes: number[]): Promise<SavedTicketImage>;
   deleteTicketImage(projectId: string, markdownPath: string): Promise<void>;
   reorderTickets(projectId: string, positions: Array<{ id: string; status: Status; rank: string }>): Promise<Ticket[]>;
@@ -156,6 +164,21 @@ export function createApi({ isTauriRuntime, mockStore = createMockStore() }: Cre
       }
 
       return mockStore.updateTicket(projectId, ticketId, title, body, status, priority, size);
+    },
+    async setTicketDependency(projectId, ticketId, relatedTicketId, relationship, linked) {
+      if (isTauriRuntime) {
+        return invoke<Ticket[]>("set_ticket_dependency", {
+          projectId,
+          ticketId,
+          update: {
+            relatedTicketId,
+            relationship,
+            linked
+          }
+        });
+      }
+
+      return mockStore.setTicketDependency(projectId, ticketId, relatedTicketId, relationship, linked);
     },
     async saveTicketImage(projectId: string, ticketId: string, mimeType: string, bytes: number[]) {
       if (isTauriRuntime) {

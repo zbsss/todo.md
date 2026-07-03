@@ -4,6 +4,8 @@ export type TaskPriority = "P0" | "P1" | "P2" | "P3" | "P4";
 
 export type TaskSize = "XS" | "S" | "M" | "L" | "XL";
 
+export type TicketDependencyRelationship = "parent" | "subtask" | "blocks" | "blockedBy";
+
 export type ProjectSummary = {
   id: string;
   name: string;
@@ -29,6 +31,10 @@ export type Ticket = {
   size?: TaskSize;
   prLink?: string;
   assignee?: string;
+  parent: string[];
+  subtasks: string[];
+  blocks: string[];
+  blockedBy: string[];
 };
 
 export type TicketSearchField =

@@ -107,6 +107,10 @@ pub(crate) fn write_ticket(project_dir: &Path, mut ticket: Ticket) -> Result<Tic
         .size
         .take()
         .and_then(|value| clean_enum_value(&value, SIZES));
+    ticket.parent = clean_dependency_ids(ticket.parent, Some(&ticket.id));
+    ticket.subtasks = clean_dependency_ids(ticket.subtasks, Some(&ticket.id));
+    ticket.blocks = clean_dependency_ids(ticket.blocks, Some(&ticket.id));
+    ticket.blocked_by = clean_dependency_ids(ticket.blocked_by, Some(&ticket.id));
 
     let path = ticket_write_path(&tasks_dir, &ticket)?;
     let body = ticket.body.trim_end();
@@ -118,6 +122,10 @@ pub(crate) fn write_ticket(project_dir: &Path, mut ticket: Ticket) -> Result<Tic
     append_optional_frontmatter(&mut contents, "assignee", ticket.assignee.as_deref());
     append_optional_frontmatter(&mut contents, "priority", ticket.priority.as_deref());
     append_optional_frontmatter(&mut contents, "size", ticket.size.as_deref());
+    append_dependency_frontmatter(&mut contents, "parent", &ticket.parent);
+    append_dependency_frontmatter(&mut contents, "subtasks", &ticket.subtasks);
+    append_dependency_frontmatter(&mut contents, "blocks", &ticket.blocks);
+    append_dependency_frontmatter(&mut contents, "blocked_by", &ticket.blocked_by);
     contents.push_str("---\n\n");
     contents.push_str(body);
     contents.push('\n');
@@ -159,6 +167,49 @@ pub(crate) fn apply_ticket_positions(
     }
 
     Ok(())
+}
+
+pub(crate) fn apply_ticket_dependency(
+    project_dir: &Path,
+    ticket_id: &str,
+    related_ticket_id: &str,
+    relationship: &str,
+    linked: bool,
+) -> Result<Vec<Ticket>, String> {
+    if ticket_id == related_ticket_id {
+        return Err("A ticket cannot depend on itself.".to_string());
+    }
+
+    if !safe_segment(ticket_id) || !safe_segment(related_ticket_id) {
+        return Err("Invalid ticket id.".to_string());
+    }
+
+    let (field, inverse_field) = dependency_fields_for_relationship(relationship)?;
+    let mut ticket = read_ticket(project_dir, ticket_id)?;
+    let mut related_ticket = match read_ticket(project_dir, related_ticket_id) {
+        Ok(ticket) => Some(ticket),
+        Err(_error) if !linked => None,
+        Err(error) => return Err(error),
+    };
+    let now = now_millis();
+    let changed_ticket = apply_dependency_id(&mut ticket, field, related_ticket_id, linked);
+    let changed_related = related_ticket
+        .as_mut()
+        .map(|related_ticket| apply_dependency_id(related_ticket, inverse_field, ticket_id, linked))
+        .unwrap_or(false);
+
+    if changed_ticket {
+        ticket.updated_at = now;
+        write_ticket(project_dir, ticket)?;
+    }
+
+    if changed_related {
+        let mut related_ticket = related_ticket.ok_or_else(|| "Ticket not found.".to_string())?;
+        related_ticket.updated_at = now;
+        write_ticket(project_dir, related_ticket)?;
+    }
+
+    list_tickets_from_disk(project_dir)
 }
 
 pub(crate) fn archive_done_tickets(project_dir: &Path) -> Result<usize, String> {
@@ -457,7 +508,7 @@ fn parse_ticket_file(path: &Path) -> Result<Ticket, String> {
         });
 
     Ok(Ticket {
-        id,
+        id: id.clone(),
         title,
         body: body.trim().to_string(),
         status,
@@ -479,6 +530,10 @@ fn parse_ticket_file(path: &Path) -> Result<Ticket, String> {
             .and_then(|value| clean_enum_value(value, SIZES)),
         pr_link: frontmatter_value(&frontmatter, &["pr_link", "pr_url", "pull_request"]),
         assignee: frontmatter_value(&frontmatter, &["assignee", "codex_thread", "codex_link"]),
+        parent: frontmatter_dependency_ids(&frontmatter, "parent", Some(&id)),
+        subtasks: frontmatter_dependency_ids(&frontmatter, "subtasks", Some(&id)),
+        blocks: frontmatter_dependency_ids(&frontmatter, "blocks", Some(&id)),
+        blocked_by: frontmatter_dependency_ids(&frontmatter, "blocked_by", Some(&id)),
     })
 }
 
@@ -486,6 +541,109 @@ fn frontmatter_value(frontmatter: &HashMap<String, String>, keys: &[&str]) -> Op
     keys.iter()
         .find_map(|key| frontmatter.get(*key))
         .and_then(|value| clean_metadata_value(value))
+}
+
+fn frontmatter_dependency_ids(
+    frontmatter: &HashMap<String, String>,
+    key: &str,
+    self_id: Option<&str>,
+) -> Vec<String> {
+    frontmatter
+        .get(key)
+        .map(|value| parse_dependency_ids(value, self_id))
+        .unwrap_or_default()
+}
+
+fn parse_dependency_ids(value: &str, self_id: Option<&str>) -> Vec<String> {
+    let cleaned = value
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .trim();
+
+    let raw_ids = if cleaned.contains(',') {
+        cleaned.split(',').collect::<Vec<_>>()
+    } else {
+        cleaned.split_whitespace().collect::<Vec<_>>()
+    };
+
+    clean_dependency_ids(
+        raw_ids
+            .into_iter()
+            .map(|id| id.trim().trim_matches(['"', '\'']).to_string())
+            .collect(),
+        self_id,
+    )
+}
+
+fn clean_dependency_ids(ids: Vec<String>, self_id: Option<&str>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut cleaned = Vec::new();
+
+    for id in ids {
+        let id = id.trim();
+
+        if self_id == Some(id) || !safe_segment(id) || !seen.insert(id.to_string()) {
+            continue;
+        }
+
+        cleaned.push(id.to_string());
+    }
+
+    cleaned
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DependencyField {
+    Parent,
+    Subtasks,
+    Blocks,
+    BlockedBy,
+}
+
+fn dependency_fields_for_relationship(
+    relationship: &str,
+) -> Result<(DependencyField, DependencyField), String> {
+    match relationship {
+        "parent" => Ok((DependencyField::Parent, DependencyField::Subtasks)),
+        "subtask" | "subtasks" => Ok((DependencyField::Subtasks, DependencyField::Parent)),
+        "blocks" => Ok((DependencyField::Blocks, DependencyField::BlockedBy)),
+        "blockedBy" | "blocked_by" => Ok((DependencyField::BlockedBy, DependencyField::Blocks)),
+        _ => Err("Invalid dependency relationship.".to_string()),
+    }
+}
+
+fn apply_dependency_id(
+    ticket: &mut Ticket,
+    field: DependencyField,
+    related_ticket_id: &str,
+    linked: bool,
+) -> bool {
+    let self_id = ticket.id.clone();
+    let ids = dependency_ids_mut(ticket, field);
+    let before = ids.clone();
+
+    if linked {
+        if !ids.iter().any(|id| id == related_ticket_id) {
+            ids.push(related_ticket_id.to_string());
+        }
+    } else {
+        ids.retain(|id| id != related_ticket_id);
+    }
+
+    let cleaned = clean_dependency_ids(ids.clone(), Some(&self_id));
+    *ids = cleaned;
+
+    *ids != before
+}
+
+fn dependency_ids_mut(ticket: &mut Ticket, field: DependencyField) -> &mut Vec<String> {
+    match field {
+        DependencyField::Parent => &mut ticket.parent,
+        DependencyField::Subtasks => &mut ticket.subtasks,
+        DependencyField::Blocks => &mut ticket.blocks,
+        DependencyField::BlockedBy => &mut ticket.blocked_by,
+    }
 }
 
 fn clean_metadata_value(value: &str) -> Option<String> {
@@ -519,6 +677,14 @@ fn append_optional_frontmatter(contents: &mut String, key: &str, value: Option<&
     };
 
     contents.push_str(&format!("{key}: {value}\n"));
+}
+
+fn append_dependency_frontmatter(contents: &mut String, key: &str, ids: &[String]) {
+    if ids.is_empty() {
+        return;
+    }
+
+    contents.push_str(&format!("{key}: [{}]\n", ids.join(", ")));
 }
 
 fn ticket_write_path(tasks_dir: &Path, ticket: &Ticket) -> Result<PathBuf, String> {

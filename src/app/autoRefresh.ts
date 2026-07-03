@@ -70,6 +70,17 @@ function ticketChanged(current: Ticket, next: Ticket) {
     current.priority !== next.priority ||
     current.size !== next.size ||
     current.prLink !== next.prLink ||
-    current.assignee !== next.assignee
+    current.assignee !== next.assignee ||
+    dependencyIdsChanged(current.parent, next.parent) ||
+    dependencyIdsChanged(current.subtasks, next.subtasks) ||
+    dependencyIdsChanged(current.blocks, next.blocks) ||
+    dependencyIdsChanged(current.blockedBy, next.blockedBy)
   );
+}
+
+function dependencyIdsChanged(current: string[] | undefined, next: string[] | undefined) {
+  const currentIds = current ?? [];
+  const nextIds = next ?? [];
+
+  return currentIds.length !== nextIds.length || currentIds.some((id, index) => id !== nextIds[index]);
 }

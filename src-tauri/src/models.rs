@@ -60,6 +60,14 @@ pub(crate) struct Ticket {
     pub(crate) pr_link: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) assignee: Option<String>,
+    #[serde(default)]
+    pub(crate) parent: Vec<String>,
+    #[serde(default)]
+    pub(crate) subtasks: Vec<String>,
+    #[serde(default)]
+    pub(crate) blocks: Vec<String>,
+    #[serde(default)]
+    pub(crate) blocked_by: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -95,6 +103,14 @@ pub(crate) struct TicketUpdate {
     pub(crate) priority: Option<String>,
     #[serde(default)]
     pub(crate) size: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TicketDependencyUpdate {
+    pub(crate) related_ticket_id: String,
+    pub(crate) relationship: String,
+    pub(crate) linked: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

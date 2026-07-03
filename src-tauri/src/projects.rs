@@ -136,6 +136,10 @@ pub(crate) fn seed_project(project_dir: &Path) -> Result<(), String> {
             size: None,
             pr_link: None,
             assignee: None,
+            parent: Vec::new(),
+            subtasks: Vec::new(),
+            blocks: Vec::new(),
+            blocked_by: Vec::new(),
         };
 
         write_ticket(project_dir, ticket)?;

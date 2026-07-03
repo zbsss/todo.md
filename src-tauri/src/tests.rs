@@ -20,9 +20,10 @@ use crate::{
     search::{markdown_to_plain_text, search_tickets_from_disk},
     text::now_millis,
     tickets::{
-        apply_ticket_positions, archive_done_tickets, count_markdown_files, list_tickets_from_disk,
-        normalize_status, rank_between, rank_from_legacy_order, read_ticket, split_frontmatter,
-        unique_ticket_id_from_base, validate_status, write_ticket,
+        apply_ticket_dependency, apply_ticket_positions, archive_done_tickets,
+        count_markdown_files, list_tickets_from_disk, normalize_status, rank_between,
+        rank_from_legacy_order, read_ticket, split_frontmatter, unique_ticket_id_from_base,
+        validate_status, write_ticket,
     },
 };
 
@@ -55,6 +56,10 @@ fn search_test_ticket(id: &str, title: &str, body: &str) -> Ticket {
         size: None,
         pr_link: None,
         assignee: None,
+        parent: Vec::new(),
+        subtasks: Vec::new(),
+        blocks: Vec::new(),
+        blocked_by: Vec::new(),
     }
 }
 
@@ -180,6 +185,98 @@ fn agent_metadata_is_read_and_preserved_when_tickets_are_written() {
 }
 
 #[test]
+fn dependency_frontmatter_is_read_and_written() {
+    let dir = temp_project_dir("dependency-frontmatter");
+    let ticket_path = dir.join("child-ticket.md");
+    fs::write(
+        &ticket_path,
+        "---\nid: child-ticket\ntitle: Child ticket\nstatus: ready\nrank: V\ncreated_at: 1\nupdated_at: 2\nparent: [parent-ticket, parent-ticket, child-ticket]\nsubtasks: subtask-one subtask-two\nblocks: [blocked-ticket]\nblocked_by: blocker-ticket\n---\n\nBody",
+    )
+    .expect("write ticket with dependency metadata");
+
+    let ticket = read_ticket(&dir, "child-ticket").expect("read dependency ticket");
+
+    assert_eq!(ticket.parent, vec!["parent-ticket"]);
+    assert_eq!(ticket.subtasks, vec!["subtask-one", "subtask-two"]);
+    assert_eq!(ticket.blocks, vec!["blocked-ticket"]);
+    assert_eq!(ticket.blocked_by, vec!["blocker-ticket"]);
+
+    let updated = write_ticket(
+        &dir,
+        Ticket {
+            body: "Updated body".to_string(),
+            ..ticket
+        },
+    )
+    .expect("write dependency ticket");
+    let contents = fs::read_to_string(&updated.file_path).expect("read written ticket");
+
+    assert!(contents.contains("\nparent: [parent-ticket]\n"));
+    assert!(contents.contains("\nsubtasks: [subtask-one, subtask-two]\n"));
+    assert!(contents.contains("\nblocks: [blocked-ticket]\n"));
+    assert!(contents.contains("\nblocked_by: [blocker-ticket]\n"));
+    assert!(contents.ends_with("\n\nUpdated body\n"));
+
+    fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[test]
+fn dependency_updates_are_written_to_both_tickets() {
+    let dir = temp_project_dir("dependency-symmetric-update");
+
+    for id in ["parent", "child", "blocker", "blocked"] {
+        write_ticket(&dir, search_test_ticket(id, id, "Body")).expect("write ticket");
+    }
+
+    apply_ticket_dependency(&dir, "child", "parent", "parent", true).expect("link parent");
+
+    assert_eq!(
+        read_ticket(&dir, "child").expect("read child").parent,
+        vec!["parent"]
+    );
+    assert_eq!(
+        read_ticket(&dir, "parent").expect("read parent").subtasks,
+        vec!["child"]
+    );
+
+    apply_ticket_dependency(&dir, "blocker", "blocked", "blocks", true).expect("link blocker");
+
+    assert_eq!(
+        read_ticket(&dir, "blocker").expect("read blocker").blocks,
+        vec!["blocked"]
+    );
+    assert_eq!(
+        read_ticket(&dir, "blocked")
+            .expect("read blocked")
+            .blocked_by,
+        vec!["blocker"]
+    );
+
+    apply_ticket_dependency(&dir, "parent", "child", "subtask", false).expect("unlink subtask");
+    apply_ticket_dependency(&dir, "blocked", "blocker", "blockedBy", false)
+        .expect("unlink blocker");
+
+    assert!(read_ticket(&dir, "child")
+        .expect("read unlinked child")
+        .parent
+        .is_empty());
+    assert!(read_ticket(&dir, "parent")
+        .expect("read unlinked parent")
+        .subtasks
+        .is_empty());
+    assert!(read_ticket(&dir, "blocker")
+        .expect("read unlinked blocker")
+        .blocks
+        .is_empty());
+    assert!(read_ticket(&dir, "blocked")
+        .expect("read unlinked blocked")
+        .blocked_by
+        .is_empty());
+
+    fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[test]
 fn search_matches_title_body_metadata_path_rank_and_timestamps() {
     let dir = temp_project_dir("search-field-coverage");
     let ticket = write_ticket(
@@ -197,6 +294,10 @@ fn search_matches_title_body_metadata_path_rank_and_timestamps() {
             size: Some("XL".to_string()),
             pr_link: Some("https://github.com/zbsss/todo.md/pull/42".to_string()),
             assignee: Some("codex://threads/search-agent".to_string()),
+            parent: Vec::new(),
+            subtasks: Vec::new(),
+            blocks: Vec::new(),
+            blocked_by: Vec::new(),
         },
     )
     .expect("write searchable ticket");
@@ -535,6 +636,10 @@ fn write_ticket_cleans_titles_and_uses_untitled_fallback() {
             size: None,
             pr_link: None,
             assignee: None,
+            parent: Vec::new(),
+            subtasks: Vec::new(),
+            blocks: Vec::new(),
+            blocked_by: Vec::new(),
         },
     )
     .expect("write cleaned ticket");
@@ -558,6 +663,10 @@ fn write_ticket_cleans_titles_and_uses_untitled_fallback() {
             size: None,
             pr_link: None,
             assignee: None,
+            parent: Vec::new(),
+            subtasks: Vec::new(),
+            blocks: Vec::new(),
+            blocked_by: Vec::new(),
         },
     )
     .expect("write untitled ticket");
@@ -589,6 +698,10 @@ fn applying_ticket_positions_only_rewrites_changed_tickets() {
             size: None,
             pr_link: None,
             assignee: None,
+            parent: Vec::new(),
+            subtasks: Vec::new(),
+            blocks: Vec::new(),
+            blocked_by: Vec::new(),
         },
     )
     .expect("write first ticket");
@@ -607,6 +720,10 @@ fn applying_ticket_positions_only_rewrites_changed_tickets() {
             size: None,
             pr_link: None,
             assignee: None,
+            parent: Vec::new(),
+            subtasks: Vec::new(),
+            blocks: Vec::new(),
+            blocked_by: Vec::new(),
         },
     )
     .expect("write second ticket");
@@ -724,6 +841,10 @@ fn tasks_directory_is_used_for_ticket_storage_when_present() {
             size: None,
             pr_link: None,
             assignee: None,
+            parent: Vec::new(),
+            subtasks: Vec::new(),
+            blocks: Vec::new(),
+            blocked_by: Vec::new(),
         },
     )
     .expect("write ticket");
@@ -761,6 +882,10 @@ fn preexisting_empty_tasks_directory_remains_ticket_storage() {
             size: None,
             pr_link: None,
             assignee: None,
+            parent: Vec::new(),
+            subtasks: Vec::new(),
+            blocks: Vec::new(),
+            blocked_by: Vec::new(),
         },
     )
     .expect("write ticket");
@@ -808,6 +933,10 @@ fn unrelated_nonempty_tasks_directory_does_not_replace_root_ticket_storage() {
             size: None,
             pr_link: None,
             assignee: None,
+            parent: Vec::new(),
+            subtasks: Vec::new(),
+            blocks: Vec::new(),
+            blocked_by: Vec::new(),
         },
     )
     .expect("write root ticket");
@@ -838,6 +967,10 @@ fn pasted_ticket_images_are_stored_under_tasks_images() {
             size: None,
             pr_link: None,
             assignee: None,
+            parent: Vec::new(),
+            subtasks: Vec::new(),
+            blocks: Vec::new(),
+            blocked_by: Vec::new(),
         },
     )
     .expect("write ticket");
@@ -883,6 +1016,10 @@ fn pasted_ticket_images_accept_mime_parameters() {
             size: None,
             pr_link: None,
             assignee: None,
+            parent: Vec::new(),
+            subtasks: Vec::new(),
+            blocks: Vec::new(),
+            blocked_by: Vec::new(),
         },
     )
     .expect("write ticket");
@@ -997,6 +1134,10 @@ fn pasted_ticket_images_can_be_deleted_by_markdown_path() {
             size: None,
             pr_link: None,
             assignee: None,
+            parent: Vec::new(),
+            subtasks: Vec::new(),
+            blocks: Vec::new(),
+            blocked_by: Vec::new(),
         },
     )
     .expect("write ticket");
