@@ -1,10 +1,10 @@
 ---
 id: 1783038731436-create-agentic-loop
 title: Create agentic loop
-status: review
+status: done
 rank: k
 created_at: 1783038731436
-updated_at: 1783106092186
+updated_at: 1783107796375
 priority: P0
 size: L
 ---
