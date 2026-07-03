@@ -35,7 +35,8 @@ execFileSync(
     resolve(repoRoot, "src/tickets/table.ts"),
     resolve(repoRoot, "src/markdown/render.ts"),
     resolve(repoRoot, "src/markdown/title.ts"),
-    resolve(repoRoot, "src/markdown/images.ts")
+    resolve(repoRoot, "src/markdown/images.ts"),
+    resolve(repoRoot, "src/taskSelectorDismiss.ts")
   ],
   { stdio: "inherit" }
 );
@@ -45,6 +46,7 @@ const table = await import(pathToFileURL(join(outDir, "tickets/table.js")).href)
 const markdown = await import(pathToFileURL(join(outDir, "markdown/render.js")).href);
 const title = await import(pathToFileURL(join(outDir, "markdown/title.js")).href);
 const images = await import(pathToFileURL(join(outDir, "markdown/images.js")).href);
+const taskSelectorDismiss = await import(pathToFileURL(join(outDir, "taskSelectorDismiss.js")).href);
 
 function ticket(overrides) {
   return {
@@ -177,6 +179,41 @@ test("sortTicketsForTable sorts by an explicit table column", () => {
     table.sortTicketsForTable(tickets, { column: "size", direction: "desc" }).map((item) => item.id),
     ["xl", "medium", "small"]
   );
+});
+
+test("task selector dismissal keeps clicks inside a selector open", () => {
+  const selector = {};
+  const target = {
+    closest(selectorText) {
+      return selectorText === "[data-task-selector]" ? selector : null;
+    }
+  };
+
+  assert.equal(taskSelectorDismiss.shouldCloseTaskSelectorsForPointerTarget(target), false);
+});
+
+test("task selector dismissal closes for targets outside selectors", () => {
+  const target = {
+    closest() {
+      return null;
+    }
+  };
+
+  assert.equal(taskSelectorDismiss.shouldCloseTaskSelectorsForPointerTarget(target), true);
+  assert.equal(taskSelectorDismiss.shouldCloseTaskSelectorsForPointerTarget(null), true);
+});
+
+test("task selector dismissal checks parent elements for non-element targets", () => {
+  const selector = {};
+  const target = {
+    parentElement: {
+      closest(selectorText) {
+        return selectorText === "[data-task-selector]" ? selector : null;
+      }
+    }
+  };
+
+  assert.equal(taskSelectorDismiss.shouldCloseTaskSelectorsForPointerTarget(target), false);
 });
 
 test("renderMarkdown escapes HTML and protects inline code from markdown formatting", () => {
