@@ -37,6 +37,7 @@ execFileSync(
     resolve(repoRoot, "src/markdown/render.ts"),
     resolve(repoRoot, "src/markdown/title.ts"),
     resolve(repoRoot, "src/markdown/images.ts"),
+    resolve(repoRoot, "src/tickets/quickAdd.ts"),
     resolve(repoRoot, "src/quickAddTextarea.ts")
   ],
   { stdio: "inherit" }
@@ -48,6 +49,7 @@ const table = await import(pathToFileURL(join(outDir, "tickets/table.js")).href)
 const markdown = await import(pathToFileURL(join(outDir, "markdown/render.js")).href);
 const title = await import(pathToFileURL(join(outDir, "markdown/title.js")).href);
 const images = await import(pathToFileURL(join(outDir, "markdown/images.js")).href);
+const quickAdd = await import(pathToFileURL(join(outDir, "tickets/quickAdd.js")).href);
 const quickAddTextarea = await import(pathToFileURL(join(outDir, "quickAddTextarea.js")).href);
 
 function ticket(overrides) {
@@ -187,6 +189,14 @@ test("ticketPathRelativeToProject returns a project-relative ticket path", () =>
     paths.ticketPathRelativeToProject("/Users/example/other/.tasks/ticket.md", "/Users/example/project"),
     "/Users/example/other/.tasks/ticket.md"
   );
+});
+
+test("canQuickAddTicket only allows backlog-oriented columns", () => {
+  assert.equal(quickAdd.canQuickAddTicket("draft"), true);
+  assert.equal(quickAdd.canQuickAddTicket("ready"), true);
+  assert.equal(quickAdd.canQuickAddTicket("review"), true);
+  assert.equal(quickAdd.canQuickAddTicket("doing"), false);
+  assert.equal(quickAdd.canQuickAddTicket("done"), false);
 });
 
 test("sortTicketsForTable sorts by an explicit table column", () => {
