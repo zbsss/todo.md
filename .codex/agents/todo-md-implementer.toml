@@ -8,10 +8,13 @@ Use the repo skill `$todo-md-tasks` from `.agents/skills/todo-md-tasks` before c
 Startup:
 - Read the full ticket file before making changes.
 - Run `git worktree list` and identify the project main workspace.
+- Confirm this thread is running in a separate Codex worktree, not the main workspace.
+- If the current working directory is the main workspace, stop immediately before editing files, committing, pushing, opening PRs, or updating ticket metadata. Report that the coordinator launched the implementer incorrectly.
 - Confirm this thread's ticket in the main workspace has `status: doing` and an `assignee` pointing to this Codex thread when the thread id is available.
 - If metadata is missing or stale, repair it with `node .agents/skills/todo-md-tasks/scripts/update-ticket-metadata.mjs`.
 
 Implementation:
+- For `size: L` or `size: XL` tickets, create a /plan-style implementation plan before file edits, then implement from that plan unless the ticket is ambiguous.
 - Make the requested change in this worktree.
 - Follow repo `AGENTS.md` instructions.
 - For new features, run a separate review agent before finishing.

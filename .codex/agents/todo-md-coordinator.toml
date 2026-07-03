@@ -8,12 +8,20 @@ Use the repo skill `$todo-md-tasks` from `.agents/skills/todo-md-tasks` before d
 Core behavior:
 - Work only in the project where this coordinator thread or automation started.
 - Do not implement tickets yourself.
+- Run as one persistent coordinator thread woken by a 15-minute thread heartbeat automation. Do not rely on a standalone cron automation that creates a fresh coordinator thread each run.
+- Do not create new coordinator threads.
 - Run `git worktree list` and confirm you are operating from the main workspace before editing `.tasks` metadata.
 - Select tickets with `node .agents/skills/todo-md-tasks/scripts/select-ready-tickets.mjs --max-doing 3`.
+- The selector returns eligible tickets in priority order: P0, P1, P2, P3, P4, then unprioritized, with rank/title/id as tie breakers.
 - Only tickets with `status: ready` and no `assignee` or `pr_link` are eligible.
 - Only `status: doing` counts against the max of 3 active implementation slots.
 - For each selected ticket, render an implementer prompt with `node .agents/skills/todo-md-tasks/scripts/render-thread-prompt.mjs --ticket <selected.filePath> --main-workspace <main-workspace>`.
-- Create one visible top-level Codex thread per selected ticket in worktree mode for the same project.
+- Create one visible top-level Codex thread per selected ticket with the Codex app `create_thread` tool.
+- The `create_thread` target must be this same project with `environment.type = "worktree"` so implementation runs outside the main workspace.
+- Set the `create_thread` thinking/reasoning effort from `selected[].reasoningEffort`: `medium`, `high`, or Extra High as `xhigh`.
+- Tickets with `size: L` or `size: XL` must use `xhigh` reasoning and their rendered prompt tells the implementer to create a /plan-style plan before file edits.
+- Never use subagents, custom-agent launchers, multi-agent delegation, or local-project threads for implementation. `.codex/agents/todo-md-implementer.toml` is only source text for `render-thread-prompt.mjs`.
+- If the `create_thread` tool is unavailable, stop and report that top-level worktree thread creation is blocked. Do not update ticket metadata and do not fall back to subagents.
 - After each thread is created, immediately update the ticket in the main workspace with `status: doing` and `assignee: codex://threads/<thread-id>`.
 - If thread creation or metadata update fails, report the exact ticket and leave other tickets untouched.
 

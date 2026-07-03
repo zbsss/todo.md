@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 
 export const statuses = ["draft", "ready", "doing", "review", "done"];
 const priorityOrder = ["P0", "P1", "P2", "P3", "P4"];
+const sizes = ["XS", "S", "M", "L", "XL"];
 
 export function normalizeStatus(value) {
   if (value === "todo") {
@@ -60,6 +61,7 @@ export async function readTickets(projectDir = process.cwd()) {
     const id = frontmatter.id || path.basename(entry.name, ".md");
     const title = frontmatter.title || id;
     const priority = normalizePriority(frontmatter.priority);
+    const size = normalizeSize(frontmatter.size);
 
     tickets.push({
       id,
@@ -67,6 +69,9 @@ export async function readTickets(projectDir = process.cwd()) {
       status: normalizeStatus(frontmatter.status),
       rank: frontmatter.rank || "",
       priority,
+      size,
+      reasoningEffort: reasoningEffortForSize(size),
+      planningRequired: requiresPlanForSize(size),
       assignee: metadataValue(frontmatter, ["assignee", "codex_thread", "codex_link"]),
       prLink: metadataValue(frontmatter, ["pr_link", "pr_url", "pull_request"]),
       filePath: path.resolve(filePath)
@@ -118,6 +123,27 @@ function compareStrings(a, b) {
 function normalizePriority(value) {
   const normalized = value?.trim().toUpperCase();
   return priorityOrder.includes(normalized) ? normalized : undefined;
+}
+
+export function normalizeSize(value) {
+  const normalized = value?.trim().toUpperCase();
+  return sizes.includes(normalized) ? normalized : undefined;
+}
+
+export function reasoningEffortForSize(size) {
+  if (size === "L" || size === "XL") {
+    return "xhigh";
+  }
+
+  if (size === "M") {
+    return "high";
+  }
+
+  return "medium";
+}
+
+export function requiresPlanForSize(size) {
+  return size === "L" || size === "XL";
 }
 
 function metadataValue(frontmatter, keys) {
