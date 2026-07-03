@@ -20,6 +20,7 @@ use crate::{
     registry::{
         load_project_registry, project_dir, save_project_registry, workspace_info_from_registry,
     },
+    search::search_tickets_from_disk,
     text::{clean_title, normalize_newlines, now_millis, safe_segment, title_from_slug},
     tickets::{
         apply_ticket_positions, archive_done_tickets as archive_done_tickets_on_disk,
@@ -197,6 +198,17 @@ pub(crate) fn list_tickets(app: AppHandle, project_id: String) -> Result<Vec<Tic
     let project_dir = project_dir(&app, &project_id)?;
     allow_project_image_assets(&app, &project_dir)?;
     list_tickets_from_disk(&project_dir)
+}
+
+#[tauri::command]
+pub(crate) fn search_tickets(
+    app: AppHandle,
+    project_id: String,
+    query: String,
+) -> Result<Vec<crate::models::TicketSearchResult>, String> {
+    let project_dir = project_dir(&app, &project_id)?;
+    allow_project_image_assets(&app, &project_dir)?;
+    search_tickets_from_disk(&project_dir, &query)
 }
 
 #[tauri::command]

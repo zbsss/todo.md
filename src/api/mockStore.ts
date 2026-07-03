@@ -5,8 +5,13 @@ import type {
   TaskPriority,
   TaskSize,
   Ticket,
-  TicketDraft
+  TicketDraft,
+  TicketSearchField,
+  TicketSearchMatch,
+  TicketSearchResult,
+  TicketSearchSegment
 } from "../app/types";
+import { escapeHtml } from "../markdown/escape";
 import { bytesToDataUrl, imageExtensionForMime } from "../markdown/images";
 import { normalizeStatus, rankBetween, rankFromLegacyOrder } from "../tickets/ordering";
 
@@ -20,6 +25,8 @@ export type PersistMockDraftOptions = {
 };
 
 export type BrowserMockStore = ReturnType<typeof createMockStore>;
+
+export const maxTicketSearchQueryLength = 200;
 
 export function createMockStore() {
   const seed = (): MockStore => {
@@ -214,6 +221,9 @@ export function createMockStore() {
     async listTickets(projectId: string) {
       return read().tickets[projectId] ?? [];
     },
+    async searchTickets(projectId: string, query: string) {
+      return searchTicketsForMock(read().tickets[projectId] ?? [], query);
+    },
     async createTicket(projectId: string, status: Status, title: string) {
       const store = read();
       const now = Date.now();
@@ -376,6 +386,391 @@ export function createMockStore() {
       return updated;
     }
   };
+}
+
+export function isTicketSearchActive(query: string) {
+  return normalizeTicketSearchQuery(query).length > 0;
+}
+
+export function shouldDisableSearchReorder(query: string) {
+  return isTicketSearchActive(query);
+}
+
+export function shouldRerunTicketSearchAfterMutation(query: string) {
+  return isTicketSearchActive(query);
+}
+
+export function createTicketSearchResultMap(results: TicketSearchResult[]) {
+  return new Map(results.map((result) => [result.ticket.id, result]));
+}
+
+export function filterTicketsBySearchResults(
+  tickets: Ticket[],
+  results: TicketSearchResult[],
+  isActive: boolean
+) {
+  if (!isActive) {
+    return tickets;
+  }
+
+  const matchingIds = new Set(results.map((result) => result.ticket.id));
+  return tickets.filter((ticket) => matchingIds.has(ticket.id));
+}
+
+export function renderTicketSearchSegments(segments: TicketSearchSegment[]) {
+  return segments
+    .map((segment) => {
+      const text = escapeHtml(segment.text);
+
+      return segment.matched ? `<mark>${text}</mark>` : text;
+    })
+    .join("");
+}
+
+export function searchTicketsForMock(tickets: Ticket[], query: string): TicketSearchResult[] {
+  const normalizedQuery = normalizeTicketSearchQuery(query);
+  const queryTokens = ticketSearchTokens(query);
+
+  if (!normalizedQuery || queryTokens.length === 0) {
+    return [];
+  }
+
+  return tickets
+    .flatMap((ticket) => {
+      const fields = searchableTicketFields(ticket);
+
+      if (!queryTokens.every((token) => fields.some((field) => fieldContainsSearchToken(field.text, token)))) {
+        return [];
+      }
+
+      const fieldMatches = fields.flatMap((field) => {
+        const match = buildTicketSearchMatch(field, normalizedQuery, queryTokens);
+
+        return match ? [match] : [];
+      });
+
+      if (!fieldMatches.length) {
+        return [];
+      }
+
+      const score =
+        fieldMatches.reduce((total, match) => total + match.score, 0) +
+        Math.floor(Math.max(0, ticket.updatedAt) / 1_000_000_000_000);
+      const matches = fieldMatches
+        .sort((first, second) => second.score - first.score)
+        .slice(0, 5)
+        .map((match) => match.match);
+
+      return [
+        {
+          ticket,
+          score,
+          matches
+        }
+      ];
+    })
+    .sort((first, second) => {
+      const scoreComparison = second.score - first.score;
+
+      if (scoreComparison !== 0) {
+        return scoreComparison;
+      }
+
+      const updatedComparison = second.ticket.updatedAt - first.ticket.updatedAt;
+
+      return updatedComparison !== 0 ? updatedComparison : sortTicketIds(first.ticket, second.ticket);
+    });
+}
+
+export function normalizeTicketSearchQuery(query: string) {
+  return normalizeTicketSearchText(query.slice(0, maxTicketSearchQueryLength));
+}
+
+type SearchableTicketField = {
+  field: TicketSearchField;
+  text: string;
+  weight: number;
+  useSnippet: boolean;
+};
+
+type BuiltSearchMatch = {
+  match: TicketSearchMatch;
+  score: number;
+};
+
+type SearchRange = {
+  start: number;
+  end: number;
+};
+
+function searchableTicketFields(ticket: Ticket): SearchableTicketField[] {
+  const fields: SearchableTicketField[] = [
+    { field: "title", text: ticket.title, weight: 1000, useSnippet: false },
+    { field: "body", text: markdownToTicketSearchText(ticket.body), weight: 120, useSnippet: true },
+    { field: "status", text: ticket.status, weight: 360, useSnippet: false },
+    { field: "priority", text: ticket.priority ?? "", weight: 340, useSnippet: false },
+    { field: "size", text: ticket.size ?? "", weight: 330, useSnippet: false },
+    { field: "prLink", text: ticket.prLink ?? "", weight: 260, useSnippet: true },
+    { field: "assignee", text: ticket.assignee ?? "", weight: 260, useSnippet: true },
+    { field: "id", text: ticket.id, weight: 220, useSnippet: false },
+    { field: "filePath", text: ticket.filePath, weight: 180, useSnippet: true },
+    { field: "rank", text: ticket.rank, weight: 60, useSnippet: false },
+    { field: "createdAt", text: timestampSearchText(ticket.createdAt), weight: 35, useSnippet: false },
+    { field: "updatedAt", text: timestampSearchText(ticket.updatedAt), weight: 40, useSnippet: false }
+  ];
+
+  return fields.filter((field) => field.text.trim().length > 0);
+}
+
+function buildTicketSearchMatch(
+  field: SearchableTicketField,
+  normalizedQuery: string,
+  queryTokens: string[]
+): BuiltSearchMatch | null {
+  const phraseRanges = normalizedQuery.includes(" ")
+    ? findCaseInsensitiveRanges(field.text, normalizedQuery)
+    : [];
+  const tokenRanges = queryTokens.flatMap((token) => exactTokenRanges(field.text, token));
+  const exactRanges = mergeSearchRanges([...phraseRanges, ...tokenRanges]);
+  const fuzzyRanges =
+    exactRanges.length > 0
+      ? []
+      : mergeSearchRanges(queryTokens.flatMap((token) => fuzzyTokenRanges(field.text, token)));
+  const ranges = mergeSearchRanges([...exactRanges, ...fuzzyRanges]);
+
+  if (!ranges.length) {
+    return null;
+  }
+
+  const segments = field.useSnippet
+    ? snippetSegmentsFromRanges(field.text, ranges)
+    : segmentsFromRanges(field.text, ranges);
+  const match: TicketSearchMatch = {
+    field: field.field,
+    segments
+  };
+
+  if (field.useSnippet) {
+    match.snippetSegments = segments;
+  }
+
+  const score =
+    field.weight * (phraseRanges.length ? 4 : 1) +
+    field.weight * exactRanges.length +
+    Math.floor(field.weight / 3) * fuzzyRanges.length;
+
+  return {
+    match,
+    score
+  };
+}
+
+function fieldContainsSearchToken(text: string, token: string) {
+  return exactTokenRanges(text, token).length > 0 || fuzzyTokenRanges(text, token).length > 0;
+}
+
+function ticketSearchTokens(query: string) {
+  return normalizeTicketSearchQuery(query).split(" ").filter(Boolean);
+}
+
+function normalizeTicketSearchText(value: string) {
+  return value
+    .toLocaleLowerCase()
+    .replace(/\s+/g, " ")
+    .split(" ")
+    .map(trimSearchTokenEdges)
+    .filter(Boolean)
+    .join(" ");
+}
+
+function trimSearchTokenEdges(value: string) {
+  return value
+    .replace(/^[^\p{L}\p{N}]+/u, "")
+    .replace(/[^\p{L}\p{N}]+$/u, "");
+}
+
+function markdownToTicketSearchText(markdown: string) {
+  return markdown
+    .replace(/\r\n?/g, "\n")
+    .replace(/```/g, " ")
+    .replace(/!\[([^\]\n]*)\]\(([^)\s]+)\)/g, " $1 $2 ")
+    .replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, " $1 $2 ")
+    .replace(/`([^`\n]+)`/g, " $1 ")
+    .split("\n")
+    .map((line) =>
+      line
+        .replace(/^\s{0,3}#{1,6}\s+/, "")
+        .replace(/^\s{0,3}>\s?/, "")
+        .replace(/^\s*[-*+]\s+\[[xX]\]\s+/, "checked ")
+        .replace(/^\s*[-*+]\s+\[[ ]\]\s+/, "unchecked ")
+        .replace(/^\s*[-*+]\s+/, "")
+        .replace(/^\s*\d+\.\s+/, "")
+    )
+    .join(" ")
+    .replace(/[*_~#]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function timestampSearchText(value: number) {
+  const raw = String(value);
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return raw;
+  }
+
+  const iso = date.toISOString();
+  return `${raw} ${iso} ${iso.slice(0, 10)}`;
+}
+
+function findCaseInsensitiveRanges(text: string, needle: string): SearchRange[] {
+  const normalizedNeedle = needle.toLocaleLowerCase();
+
+  if (!normalizedNeedle) {
+    return [];
+  }
+
+  const ranges: SearchRange[] = [];
+  const lowerText = text.toLocaleLowerCase();
+  let index = lowerText.indexOf(normalizedNeedle);
+
+  while (index >= 0) {
+    ranges.push({ start: index, end: index + normalizedNeedle.length });
+    index = lowerText.indexOf(normalizedNeedle, index + normalizedNeedle.length);
+  }
+
+  return ranges;
+}
+
+function exactTokenRanges(text: string, token: string): SearchRange[] {
+  return findCaseInsensitiveRanges(text, token);
+}
+
+function fuzzyTokenRanges(text: string, token: string): SearchRange[] {
+  const maxDistance = fuzzyDistanceForToken(token);
+
+  if (maxDistance === null) {
+    return [];
+  }
+
+  const ranges: SearchRange[] = [];
+
+  for (const match of text.matchAll(/[\p{L}\p{N}]+/gu)) {
+    const word = match[0];
+    const index = match.index ?? 0;
+    const normalizedWord = normalizeTicketSearchText(word);
+
+    if (
+      normalizedWord &&
+      normalizedWord !== token &&
+      boundedEditDistance(normalizedWord, token, maxDistance) <= maxDistance
+    ) {
+      ranges.push({ start: index, end: index + word.length });
+    }
+  }
+
+  return ranges;
+}
+
+function fuzzyDistanceForToken(token: string) {
+  if (token.length < 4) {
+    return null;
+  }
+
+  return token.length >= 8 ? 2 : 1;
+}
+
+function boundedEditDistance(first: string, second: string, maxDistance: number) {
+  if (Math.abs(first.length - second.length) > maxDistance) {
+    return maxDistance + 1;
+  }
+
+  let previous = Array.from({ length: second.length + 1 }, (_, index) => index);
+
+  for (let firstIndex = 1; firstIndex <= first.length; firstIndex += 1) {
+    const current = [firstIndex];
+    let rowMinimum = current[0];
+
+    for (let secondIndex = 1; secondIndex <= second.length; secondIndex += 1) {
+      const cost = first[firstIndex - 1] === second[secondIndex - 1] ? 0 : 1;
+      const value = Math.min(
+        previous[secondIndex] + 1,
+        current[secondIndex - 1] + 1,
+        previous[secondIndex - 1] + cost
+      );
+
+      current[secondIndex] = value;
+      rowMinimum = Math.min(rowMinimum, value);
+    }
+
+    if (rowMinimum > maxDistance) {
+      return maxDistance + 1;
+    }
+
+    previous = current;
+  }
+
+  return previous[second.length];
+}
+
+function mergeSearchRanges(ranges: SearchRange[]) {
+  return ranges
+    .filter((range) => range.end > range.start)
+    .sort((first, second) => first.start - second.start || first.end - second.end)
+    .reduce<SearchRange[]>((merged, range) => {
+      const previous = merged.at(-1);
+
+      if (!previous || range.start > previous.end) {
+        merged.push({ ...range });
+        return merged;
+      }
+
+      previous.end = Math.max(previous.end, range.end);
+      return merged;
+    }, []);
+}
+
+function snippetSegmentsFromRanges(text: string, ranges: SearchRange[]) {
+  const firstRange = ranges[0];
+  const contextBefore = 44;
+  const contextAfter = 92;
+  const start = Math.max(0, firstRange.start - contextBefore);
+  const end = Math.min(text.length, firstRange.end + contextAfter);
+  const snippet = `${start > 0 ? "... " : ""}${text.slice(start, end)}${end < text.length ? " ..." : ""}`;
+  const prefixLength = start > 0 ? 4 : 0;
+  const snippetRanges = ranges
+    .map((range) => ({
+      start: Math.max(range.start, start) - start + prefixLength,
+      end: Math.min(range.end, end) - start + prefixLength
+    }))
+    .filter((range) => range.end > range.start);
+
+  return segmentsFromRanges(snippet, snippetRanges);
+}
+
+function segmentsFromRanges(text: string, ranges: SearchRange[]): TicketSearchSegment[] {
+  const segments: TicketSearchSegment[] = [];
+  let cursor = 0;
+
+  mergeSearchRanges(ranges).forEach((range) => {
+    if (range.start > cursor) {
+      segments.push({ text: text.slice(cursor, range.start), matched: false });
+    }
+
+    segments.push({ text: text.slice(range.start, range.end), matched: true });
+    cursor = range.end;
+  });
+
+  if (cursor < text.length) {
+    segments.push({ text: text.slice(cursor), matched: false });
+  }
+
+  return segments.length ? segments : [{ text, matched: false }];
+}
+
+function sortTicketIds(first: Ticket, second: Ticket) {
+  return first.id.localeCompare(second.id);
 }
 
 function nextRank(tickets: Ticket[], status: Status) {

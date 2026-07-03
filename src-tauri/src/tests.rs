@@ -17,6 +17,7 @@ use crate::{
         read_project_disk_meta, remember_removed_project_path, remove_project_record,
         reorder_project_records, write_project_disk_meta,
     },
+    search::{markdown_to_plain_text, search_tickets_from_disk},
     text::now_millis,
     tickets::{
         apply_ticket_positions, archive_done_tickets, count_markdown_files, list_tickets_from_disk,
@@ -38,6 +39,39 @@ fn project_record(id: &str, name: &str, path: &Path) -> ProjectRecord {
         path: path.to_string_lossy().to_string(),
         created_at: now_millis(),
     }
+}
+
+fn search_test_ticket(id: &str, title: &str, body: &str) -> Ticket {
+    Ticket {
+        id: id.to_string(),
+        title: title.to_string(),
+        body: body.to_string(),
+        status: "draft".to_string(),
+        rank: "V".to_string(),
+        created_at: 1,
+        updated_at: 1,
+        file_path: String::new(),
+        priority: None,
+        size: None,
+        pr_link: None,
+        assignee: None,
+    }
+}
+
+fn search_match_fields(result: &crate::models::TicketSearchResult) -> Vec<&str> {
+    result
+        .matches
+        .iter()
+        .map(|ticket_match| ticket_match.field.as_str())
+        .collect()
+}
+
+fn joined_segments(segments: &[crate::models::TicketSearchSegment]) -> String {
+    segments
+        .iter()
+        .map(|segment| segment.text.as_str())
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 #[test]
@@ -141,6 +175,257 @@ fn agent_metadata_is_read_and_preserved_when_tickets_are_written() {
     assert!(contents.contains("\nsize: M\n"));
     assert!(!contents.contains("\ntags:"));
     assert!(contents.ends_with("\n\nUpdated body\n"));
+
+    fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[test]
+fn search_matches_title_body_metadata_path_rank_and_timestamps() {
+    let dir = temp_project_dir("search-field-coverage");
+    let ticket = write_ticket(
+        &dir,
+        Ticket {
+            id: "search-all-fields".to_string(),
+            title: "Billing webhook outage".to_string(),
+            body: "Rollback steps mention escrow reconciliation.".to_string(),
+            status: "review".to_string(),
+            rank: "Qz".to_string(),
+            created_at: 0,
+            updated_at: 1_700_000_000_000,
+            file_path: String::new(),
+            priority: Some("P1".to_string()),
+            size: Some("XL".to_string()),
+            pr_link: Some("https://github.com/zbsss/todo.md/pull/42".to_string()),
+            assignee: Some("codex://threads/search-agent".to_string()),
+        },
+    )
+    .expect("write searchable ticket");
+
+    assert!(PathBuf::from(&ticket.file_path).exists());
+
+    for (query, field) in [
+        ("billing", "title"),
+        ("escrow", "body"),
+        ("review", "status"),
+        ("P1", "priority"),
+        ("XL", "size"),
+        ("pull/42", "prLink"),
+        ("search-agent", "assignee"),
+        ("search-all-fields", "id"),
+        (".md", "filePath"),
+        ("Qz", "rank"),
+        ("1970-01-01", "createdAt"),
+        ("1700000000000", "updatedAt"),
+    ] {
+        let results = search_tickets_from_disk(&dir, query).expect("search tickets");
+
+        assert_eq!(results.len(), 1, "{query} should find the ticket");
+        assert_eq!(results[0].ticket.id, "search-all-fields");
+        assert!(
+            search_match_fields(&results[0]).contains(&field),
+            "{query} should include a {field} match, got {:?}",
+            search_match_fields(&results[0])
+        );
+    }
+
+    fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[test]
+fn search_body_snippets_include_context_around_deep_matches() {
+    let dir = temp_project_dir("search-body-snippet");
+    let body = format!(
+        "{}critical needle context lives here for search snippets {}",
+        "intro ".repeat(40),
+        "tail ".repeat(40)
+    );
+    write_ticket(
+        &dir,
+        search_test_ticket("snippet-ticket", "Snippet ticket", &body),
+    )
+    .expect("write snippet ticket");
+
+    let results = search_tickets_from_disk(&dir, "needle").expect("search tickets");
+    let body_match = results[0]
+        .matches
+        .iter()
+        .find(|ticket_match| ticket_match.field == "body")
+        .expect("body match");
+    let snippet = joined_segments(&body_match.snippet_segments);
+
+    assert!(snippet.contains("critical needle context"));
+    assert!(snippet.starts_with("..."));
+    assert!(snippet.len() < markdown_to_plain_text(&body).len());
+    assert!(body_match
+        .snippet_segments
+        .iter()
+        .any(|segment| segment.matched && segment.text == "needle"));
+
+    fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[test]
+fn search_long_title_matches_return_highlight_segments() {
+    let dir = temp_project_dir("search-long-title-highlight");
+    let title = format!(
+        "{} decisive longtitletoken that still needs title highlighting",
+        "prefix ".repeat(15)
+    );
+    write_ticket(
+        &dir,
+        search_test_ticket("long-title-ticket", &title, "Body"),
+    )
+    .expect("write long-title ticket");
+
+    let results = search_tickets_from_disk(&dir, "longtitletoken").expect("search tickets");
+    let title_match = results[0]
+        .matches
+        .iter()
+        .find(|ticket_match| ticket_match.field == "title")
+        .expect("title match");
+
+    assert!(title_match.snippet_segments.is_empty());
+    assert!(title_match
+        .segments
+        .iter()
+        .any(|segment| segment.matched && segment.text == "longtitletoken"));
+
+    fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[test]
+fn search_fuzzy_matching_is_narrow() {
+    let dir = temp_project_dir("search-fuzzy");
+    write_ticket(
+        &dir,
+        search_test_ticket(
+            "auth-ticket",
+            "Authentication broker",
+            "Token exchange details",
+        ),
+    )
+    .expect("write auth ticket");
+
+    let close = search_tickets_from_disk(&dir, "authentcation").expect("search close typo");
+    assert_eq!(close.len(), 1);
+    assert_eq!(close[0].ticket.id, "auth-ticket");
+
+    let distant = search_tickets_from_disk(&dir, "zzthentzztion").expect("search distant typo");
+    assert!(distant.is_empty());
+
+    fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[test]
+fn search_multi_token_queries_require_every_token_somewhere() {
+    let dir = temp_project_dir("search-and-semantics");
+    write_ticket(
+        &dir,
+        search_test_ticket("both-ticket", "Alpha release", "Beta validation notes"),
+    )
+    .expect("write both ticket");
+    write_ticket(
+        &dir,
+        search_test_ticket("alpha-ticket", "Alpha only", "No second token here"),
+    )
+    .expect("write alpha ticket");
+    write_ticket(
+        &dir,
+        search_test_ticket("beta-ticket", "Other title", "Beta only"),
+    )
+    .expect("write beta ticket");
+
+    let results = search_tickets_from_disk(&dir, "alpha beta").expect("search tickets");
+
+    assert_eq!(
+        results
+            .iter()
+            .map(|result| result.ticket.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["both-ticket"]
+    );
+
+    fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[test]
+fn search_ordering_prefers_title_matches_over_body_matches() {
+    let dir = temp_project_dir("search-ordering");
+    let mut title_ticket = search_test_ticket("title-match", "Cache invalidation", "No body hit");
+    title_ticket.updated_at = 1;
+    write_ticket(&dir, title_ticket).expect("write title ticket");
+
+    let mut body_ticket = search_test_ticket(
+        "body-match",
+        "Background worker",
+        "Cache invalidation appears in the body only",
+    );
+    body_ticket.updated_at = 999_999;
+    write_ticket(&dir, body_ticket).expect("write body ticket");
+
+    let results = search_tickets_from_disk(&dir, "cache").expect("search tickets");
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].ticket.id, "title-match");
+    assert!(results[0].score > results[1].score);
+
+    fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[test]
+fn markdown_plain_text_extraction_keeps_readable_content() {
+    let markdown = r#"
+# Heading
+> - [x] **Done** [label](https://example.com)
+- [ ] Todo with `inline code`
+![Alt text](images/foo.png)
+1. Item with _emphasis_
+```rust
+fn main() {}
+```
+"#;
+
+    let plain = markdown_to_plain_text(markdown);
+
+    assert!(plain.contains("Heading"));
+    assert!(plain.contains("checked Done label https://example.com"));
+    assert!(plain.contains("unchecked Todo with inline code"));
+    assert!(plain.contains("Alt text images/foo.png"));
+    assert!(plain.contains("Item with emphasis"));
+    assert!(plain.contains("fn main() {}"));
+    assert!(!plain.contains("[x]"));
+    assert!(!plain.contains("```"));
+}
+
+#[test]
+fn search_segments_do_not_split_multibyte_characters() {
+    let dir = temp_project_dir("search-unicode-segments");
+    write_ticket(
+        &dir,
+        search_test_ticket("unicode-ticket", "Fix naïve café parser", "Body"),
+    )
+    .expect("write unicode ticket");
+
+    let results = search_tickets_from_disk(&dir, "café").expect("search tickets");
+    let title_match = results[0]
+        .matches
+        .iter()
+        .find(|ticket_match| ticket_match.field == "title")
+        .expect("title match");
+
+    assert_eq!(
+        joined_segments(&title_match.segments),
+        "Fix naïve café parser"
+    );
+    assert_eq!(
+        title_match
+            .segments
+            .iter()
+            .filter(|segment| segment.matched)
+            .map(|segment| segment.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["café"]
+    );
 
     fs::remove_dir_all(dir).expect("cleanup");
 }

@@ -31,6 +31,38 @@ export type Ticket = {
   assignee?: string;
 };
 
+export type TicketSearchField =
+  | "title"
+  | "body"
+  | "status"
+  | "priority"
+  | "size"
+  | "prLink"
+  | "assignee"
+  | "id"
+  | "filePath"
+  | "rank"
+  | "createdAt"
+  | "updatedAt";
+
+export type TicketSearchSegment = {
+  text: string;
+  matched: boolean;
+};
+
+export type TicketSearchMatch = {
+  field: TicketSearchField;
+  segments: TicketSearchSegment[];
+  snippetSegments?: TicketSearchSegment[];
+  snippet_segments?: TicketSearchSegment[];
+};
+
+export type TicketSearchResult = {
+  ticket: Ticket;
+  score: number;
+  matches: TicketSearchMatch[];
+};
+
 export type TicketDraft = {
   id: string;
   title: string;
