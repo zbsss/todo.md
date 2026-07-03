@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
 import {
@@ -25,11 +25,11 @@ async function writeTicket(projectDir, fileName, frontmatter, body = "Body") {
   await writeFile(join(projectDir, ".tasks", fileName), `---\n${lines.join("\n")}\n---\n\n${body}\n`);
 }
 
-test("selectReadyTickets fills only doing slots from unassigned ready tickets", async () => {
+test("selectReadyTickets fills doing slots from unassigned ready tickets in priority order", async () => {
   const projectDir = await tempProject("select-ready");
 
-  await writeTicket(projectDir, "p2.md", { id: "p2", title: "P2", status: "ready", rank: "b", priority: "P2" });
-  await writeTicket(projectDir, "p0.md", { id: "p0", title: "P0", status: "ready", rank: "z", priority: "P0" });
+  await writeTicket(projectDir, "p2.md", { id: "p2", title: "P2", status: "ready", rank: "b", priority: "P2", size: "M" });
+  await writeTicket(projectDir, "p0.md", { id: "p0", title: "P0", status: "ready", rank: "z", priority: "P0", size: "XL" });
   await writeTicket(projectDir, "assigned.md", {
     id: "assigned",
     title: "Assigned",
@@ -46,6 +46,13 @@ test("selectReadyTickets fills only doing slots from unassigned ready tickets", 
   assert.equal(result.doingCount, 1);
   assert.equal(result.slots, 2);
   assert.deepEqual(result.selected.map((ticket) => ticket.id), ["p0", "p2"]);
+  assert.deepEqual(
+    result.selected.map((ticket) => [ticket.id, ticket.size, ticket.reasoningEffort, ticket.planningRequired]),
+    [
+      ["p0", "XL", "xhigh", true],
+      ["p2", "M", "high", false]
+    ]
+  );
 });
 
 test("task scripts handle CRLF ticket frontmatter", async () => {
@@ -89,19 +96,45 @@ test("updateTicketMetadataText preserves body and updates canonical metadata", (
 test("renderThreadPrompt includes implementer role instructions and ticket context", async () => {
   const projectDir = await tempProject("render-prompt");
   const agentPath = join(projectDir, "agent.toml");
+  const ticketPath = join(projectDir, ".tasks", "example.md");
 
   await writeFile(
     agentPath,
     'name = "todo-md-implementer"\ndescription = "Implements one task."\ndeveloper_instructions = """\nUse the shared task skill.\n"""\n'
   );
+  await writeTicket(projectDir, "example.md", {
+    id: "example",
+    title: "Example",
+    status: "ready",
+    priority: "P1",
+    size: "XL"
+  });
 
   const prompt = await renderThreadPrompt({
     agentPath,
-    ticketPath: ".tasks/example.md",
-    mainWorkspace: "/repo"
+    ticketPath,
+    mainWorkspace: projectDir
   });
 
   assert.match(prompt, /todo-md-implementer/);
-  assert.match(prompt, /\/repo\/\.tasks\/example\.md/);
+  assert.match(prompt, new RegExp(`${escapeRegex(resolve(ticketPath))}`));
   assert.match(prompt, /Use the shared task skill/);
+  assert.match(prompt, /top-level Codex thread running in Worktree mode, not a subagent/);
+  assert.match(prompt, /current working directory is the main workspace, stop before editing files/);
+  assert.match(prompt, /Recommended create_thread thinking: xhigh/);
+  assert.match(prompt, /Ticket size: XL/);
+  assert.match(prompt, /\/plan-style implementation plan/);
 });
+
+test("coordinator instructions require create_thread and forbid subagent fallback", async () => {
+  const instructions = await readFile(".codex/agents/todo-md-coordinator.toml", "utf8");
+
+  assert.match(instructions, /create_thread/);
+  assert.match(instructions, /environment\.type = "worktree"/);
+  assert.match(instructions, /If the `create_thread` tool is unavailable, stop/);
+  assert.match(instructions, /Never use subagents/);
+});
+
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}

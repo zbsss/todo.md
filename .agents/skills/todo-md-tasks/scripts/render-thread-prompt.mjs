@@ -2,6 +2,12 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  normalizeSize,
+  reasoningEffortForSize,
+  requiresPlanForSize,
+  splitFrontmatter
+} from "./select-ready-tickets.mjs";
 
 export async function renderThreadPrompt(options) {
   const agentPath = path.resolve(options.agentPath ?? ".codex/agents/todo-md-implementer.toml");
@@ -9,6 +15,10 @@ export async function renderThreadPrompt(options) {
   const ticketPath = path.isAbsolute(options.ticketPath)
     ? options.ticketPath
     : path.resolve(mainWorkspace, options.ticketPath);
+  const ticketMetadata = await readTicketMetadata(ticketPath);
+  const size = normalizeSize(options.size) ?? ticketMetadata.size;
+  const reasoningEffort = options.reasoningEffort ?? reasoningEffortForSize(size);
+  const planningRequired = options.planningRequired ?? requiresPlanForSize(size);
   const agentToml = await fs.readFile(agentPath, "utf8");
   const name = readTomlString(agentToml, "name") ?? "todo-md-implementer";
   const description = readTomlString(agentToml, "description") ?? "";
@@ -22,6 +32,14 @@ export async function renderThreadPrompt(options) {
     `You are starting a visible top-level Codex thread for the project agent role \`${name}\`.`,
     description ? `Role description: ${description}` : "",
     "",
+    "This must be a top-level Codex thread running in Worktree mode, not a subagent or local-project delegation.",
+    "If your current working directory is the main workspace, stop before editing files and report that the coordinator launched you incorrectly.",
+    `Recommended create_thread thinking: ${reasoningEffort}`,
+    size ? `Ticket size: ${size}` : "Ticket size: unspecified",
+    planningRequired
+      ? "This is a large ticket. Start with a /plan-style implementation plan before file edits, then implement from that plan unless the ticket is ambiguous."
+      : "This ticket can proceed directly after the required ticket/worktree checks.",
+    "",
     "Load and use the repo skill `$todo-md-tasks` from `.agents/skills/todo-md-tasks` before acting.",
     `Ticket file: ${ticketPath}`,
     `Main workspace: ${mainWorkspace}`,
@@ -33,6 +51,22 @@ export async function renderThreadPrompt(options) {
   ]
     .filter((line) => line !== "")
     .join("\n");
+}
+
+async function readTicketMetadata(ticketPath) {
+  try {
+    const contents = await fs.readFile(ticketPath, "utf8");
+    const { frontmatter } = splitFrontmatter(contents);
+    return {
+      size: normalizeSize(frontmatter.size)
+    };
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return {};
+    }
+
+    throw error;
+  }
 }
 
 export function readTomlString(contents, key) {
@@ -62,6 +96,12 @@ function parseArgs(argv) {
       options.ticketPath = argv[++index];
     } else if (arg === "--main-workspace") {
       options.mainWorkspace = argv[++index];
+    } else if (arg === "--size") {
+      options.size = argv[++index];
+    } else if (arg === "--reasoning-effort") {
+      options.reasoningEffort = argv[++index];
+    } else if (arg === "--plan-first") {
+      options.planningRequired = true;
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
