@@ -204,9 +204,7 @@ select:focus {
     box-shadow 120ms ease;
 }
 
-.icon-button:hover,
-.ghost-button:hover,
-.save-button:hover {
+.icon-button:hover {
   transform: translateY(-1px);
 }
 
@@ -465,6 +463,10 @@ select:focus {
   gap: 8px;
   border-radius: 8px;
   padding: 0 13px;
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    box-shadow 120ms ease;
 }
 
 .ghost-button {
