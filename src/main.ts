@@ -83,6 +83,7 @@ import { bindQuickAddTextarea } from "./quickAddTextarea";
 import { findTaskSelectorFromTarget } from "./taskSelectorClose";
 import { insertTicket, rankForInsertion, sortTickets } from "./tickets/ordering";
 import { ticketPathRelativeToProject } from "./tickets/paths";
+import { canQuickAddTicket } from "./tickets/quickAdd";
 import {
   defaultTableSorts,
   sortTicketsForTable,
@@ -667,6 +668,16 @@ function renderLoadingBoard() {
 
 function renderColumn(column: { id: Status; label: string; icon: string }) {
   const tickets = ticketsFor(column.id);
+  const quickAdd = canQuickAddTicket(column.id)
+    ? `
+      <form class="quick-add" data-action="create-ticket" data-status="${column.id}">
+        <textarea name="title" placeholder="Add ticket" rows="1" spellcheck="true"></textarea>
+        <button class="icon-button" aria-label="Add ticket" title="Add ticket">
+          ${icon("plus")}
+        </button>
+      </form>
+    `
+    : "";
   const action =
     column.id === "done"
       ? `
@@ -698,12 +709,7 @@ function renderColumn(column: { id: Status; label: string; icon: string }) {
         ${tickets.map(renderTicketCard).join("")}
       </div>
 
-      <form class="quick-add" data-action="create-ticket" data-status="${column.id}">
-        <textarea name="title" placeholder="Add ticket" rows="1" spellcheck="true"></textarea>
-        <button class="icon-button" aria-label="Add ticket" title="Add ticket">
-          ${icon("plus")}
-        </button>
-      </form>
+      ${quickAdd}
     </section>
   `;
 }
