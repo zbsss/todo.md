@@ -1210,7 +1210,19 @@ select:focus {
 }
 
 .quick-add {
+  align-items: end;
   padding-top: 2px;
+}
+
+.quick-add textarea {
+  min-height: 38px;
+  overflow: hidden;
+  resize: none;
+  border-color: rgba(200, 191, 173, 0.92);
+  background: #fffdf9;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  line-height: 1.35;
+  padding: 8px 11px;
 }
 
 .markdown {

@@ -73,6 +73,7 @@ import {
   titleDisplayValue,
   untitledTicketTitle
 } from "./markdown/title";
+import { bindQuickAddTextarea } from "./quickAddTextarea";
 import { findTaskSelectorFromTarget } from "./taskSelectorClose";
 import { insertTicket, rankForInsertion, sortTickets } from "./tickets/ordering";
 import {
@@ -595,7 +596,7 @@ function renderColumn(column: { id: Status; label: string; icon: string }) {
       </div>
 
       <form class="quick-add" data-action="create-ticket" data-status="${column.id}">
-        <input name="title" placeholder="Add ticket" autocomplete="off" />
+        <textarea name="title" placeholder="Add ticket" rows="1" spellcheck="true"></textarea>
         <button class="icon-button" aria-label="Add ticket" title="Add ticket">
           ${icon("plus")}
         </button>
@@ -1770,6 +1771,11 @@ function bindTicketEvents() {
   document
     .querySelectorAll<HTMLFormElement>('[data-action="create-ticket"]')
     .forEach((form) => {
+      const textarea = form.elements.namedItem("title") as HTMLTextAreaElement | null;
+      if (textarea) {
+        bindQuickAddTextarea(textarea);
+      }
+
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
         const currentForm = event.currentTarget as HTMLFormElement | null;
@@ -1779,7 +1785,7 @@ function bindTicketEvents() {
         }
 
         const status = currentForm.dataset.status as Status;
-        const input = currentForm.elements.namedItem("title") as HTMLInputElement;
+        const input = currentForm.elements.namedItem("title") as HTMLTextAreaElement;
         const title = input.value.trim();
 
         if (!title) {
