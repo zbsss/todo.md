@@ -10,6 +10,7 @@ export type AutomaticRefreshState = {
   hasProjectMenu: boolean;
   hasTicketMenu: boolean;
   hasProjectRename: boolean;
+  hasConfirmationDialog: boolean;
   hasOpenTaskSelector: boolean;
   hasLocalMutation: boolean;
   hasPendingImageUploads: boolean;
@@ -25,6 +26,7 @@ export function canRunAutomaticRefresh(state: AutomaticRefreshState) {
     !state.hasProjectMenu &&
     !state.hasTicketMenu &&
     !state.hasProjectRename &&
+    !state.hasConfirmationDialog &&
     !state.hasOpenTaskSelector &&
     !state.hasLocalMutation &&
     !state.hasPendingImageUploads &&

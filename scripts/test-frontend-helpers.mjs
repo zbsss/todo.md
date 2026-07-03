@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -35,6 +35,7 @@ execFileSync(
     resolve(repoRoot, "src/tickets/paths.ts"),
     resolve(repoRoot, "src/tickets/table.ts"),
     resolve(repoRoot, "src/api/mockStore.ts"),
+    resolve(repoRoot, "src/app/confirmation.ts"),
     resolve(repoRoot, "src/markdown/escape.ts"),
     resolve(repoRoot, "src/markdown/render.ts"),
     resolve(repoRoot, "src/markdown/title.ts"),
@@ -51,6 +52,7 @@ const ordering = await import(pathToFileURL(join(outDir, "tickets/ordering.js"))
 const paths = await import(pathToFileURL(join(outDir, "tickets/paths.js")).href);
 const table = await import(pathToFileURL(join(outDir, "tickets/table.js")).href);
 const search = await import(pathToFileURL(join(outDir, "api/mockStore.js")).href);
+const confirmation = await import(pathToFileURL(join(outDir, "app/confirmation.js")).href);
 const markdown = await import(pathToFileURL(join(outDir, "markdown/render.js")).href);
 const title = await import(pathToFileURL(join(outDir, "markdown/title.js")).href);
 const images = await import(pathToFileURL(join(outDir, "markdown/images.js")).href);
@@ -430,6 +432,97 @@ test("active search disables reorder and marks mutations for rerun", () => {
   assert.equal(search.shouldDisableSearchReorder("   "), false);
   assert.equal(search.shouldRerunTicketSearchAfterMutation("P1"), true);
   assert.equal(search.shouldRerunTicketSearchAfterMutation(""), false);
+});
+
+test("confirmation dialog config normalizes labels, icons, and destructive button classes", () => {
+  assert.deepEqual(confirmation.normalizeConfirmationDialogConfig(), {
+    kind: "warning",
+    confirmLabel: "Confirm",
+    cancelLabel: "Cancel",
+    icon: "check",
+    confirmIcon: "check"
+  });
+
+  assert.deepEqual(
+    confirmation.normalizeConfirmationDialogConfig({
+      kind: "danger",
+      confirmLabel: " Delete ",
+      cancelLabel: "",
+      icon: "trash-2",
+      confirmIcon: "trash-2"
+    }),
+    {
+      kind: "danger",
+      confirmLabel: "Delete",
+      cancelLabel: "Cancel",
+      icon: "trash-2",
+      confirmIcon: "trash-2"
+    }
+  );
+
+  assert.equal(confirmation.confirmationConfirmButtonClass("danger"), "confirmation-confirm danger");
+  assert.equal(confirmation.confirmationConfirmButtonClass("warning"), "confirmation-confirm");
+});
+
+test("app dialog queue serializes dialog openers", async () => {
+  const enqueue = confirmation.createAppDialogQueue();
+  const order = [];
+  let resolveFirst;
+  let resolveSecond;
+
+  const first = enqueue(
+    () =>
+      new Promise((resolve) => {
+        order.push("first-open");
+        resolveFirst = () => {
+          order.push("first-resolve");
+          resolve("first");
+        };
+      })
+  );
+  const second = enqueue(
+    () =>
+      new Promise((resolve) => {
+        order.push("second-open");
+        resolveSecond = () => {
+          order.push("second-resolve");
+          resolve("second");
+        };
+      })
+  );
+
+  await Promise.resolve();
+  assert.deepEqual(order, ["first-open"]);
+  resolveFirst();
+  assert.equal(await first, "first");
+  await Promise.resolve();
+  assert.deepEqual(order, ["first-open", "first-resolve", "second-open"]);
+  resolveSecond();
+  assert.equal(await second, "second");
+});
+
+test("app dialog queue continues after a rejected dialog", async () => {
+  const enqueue = confirmation.createAppDialogQueue();
+
+  await assert.rejects(enqueue(() => Promise.reject(new Error("closed"))), /closed/);
+  assert.equal(await enqueue(() => Promise.resolve("next")), "next");
+});
+
+test("text input dialog submissions trim values and reject empty input", () => {
+  assert.equal(confirmation.normalizeTextInputDialogSubmission(null), null);
+  assert.equal(confirmation.normalizeTextInputDialogSubmission("   "), null);
+  assert.equal(confirmation.normalizeTextInputDialogSubmission("  /tmp/project  "), "/tmp/project");
+});
+
+test("main UI avoids native browser confirm and prompt popups", async () => {
+  const source = await readFile(resolve(repoRoot, "src/main.ts"), "utf8");
+
+  assert.equal(source.includes("window.confirm"), false);
+  assert.equal(source.includes("window.prompt"), false);
+  assert.match(source, /confirmAction\(`Delete/);
+  assert.match(source, /confirmAction\(\s*`Archive/);
+  assert.match(source, /confirmAction\(\s*`Remove/);
+  assert.match(source, /requestTextInput\("Project folder name"/);
 });
 
 test("mock search returns body snippets with escaped highlighted segments", () => {

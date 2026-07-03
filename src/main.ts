@@ -19,7 +19,7 @@ import {
   WidgetType
 } from "@codemirror/view";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { confirm, open } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   Archive,
   ArrowDown,
@@ -89,6 +89,14 @@ import {
   ticketsChanged,
   workspaceInfoChanged
 } from "./app/autoRefresh";
+import {
+  createAppDialogQueue,
+  confirmationConfirmButtonClass,
+  normalizeConfirmationDialogConfig,
+  normalizeTextInputDialogSubmission,
+  type ConfirmationDialogConfig,
+  type ConfirmationDialogOptions
+} from "./app/confirmation";
 import { escapeAttr, escapeHtml } from "./markdown/escape";
 import { imageExtensionForMime, resolveMarkdownImageSrc } from "./markdown/images";
 import { renderMarkdown } from "./markdown/render";
@@ -165,6 +173,33 @@ type SearchFocusSnapshot = {
   end: number | null;
 } | null;
 
+type ConfirmationDialogState = {
+  id: number;
+  title: string;
+  message: string;
+  config: ConfirmationDialogConfig;
+  resolve: (confirmed: boolean) => void;
+  previousFocus: HTMLElement | null;
+  previousFocusSelector: string | null;
+};
+
+type TextInputDialogOptions = ConfirmationDialogOptions & {
+  placeholder?: string;
+  initialValue?: string;
+};
+
+type TextInputDialogState = {
+  id: number;
+  title: string;
+  message: string;
+  value: string;
+  placeholder: string;
+  config: ConfirmationDialogConfig;
+  resolve: (value: string | null) => void;
+  previousFocus: HTMLElement | null;
+  previousFocusSelector: string | null;
+};
+
 const state: {
   activePage: ActivePage;
   workspace: WorkspaceInfo | null;
@@ -189,6 +224,8 @@ const state: {
   searchResults: TicketSearchResult[];
   searchResultMap: Map<string, TicketSearchResult>;
   searchRequestSeq: number;
+  confirmationDialog: ConfirmationDialogState | null;
+  textInputDialog: TextInputDialogState | null;
 } = {
   activePage: "project",
   workspace: null,
@@ -212,7 +249,9 @@ const state: {
   searchPending: false,
   searchResults: [],
   searchResultMap: new Map(),
-  searchRequestSeq: 0
+  searchRequestSeq: 0,
+  confirmationDialog: null,
+  textInputDialog: null
 };
 
 const runtime = detectAppRuntime();
@@ -257,6 +296,9 @@ let automaticRefreshTimer: ReturnType<typeof window.setInterval> | null = null;
 let ticketSearchDebounceTimer: ReturnType<typeof window.setTimeout> | null = null;
 let isAutomaticRefreshRunning = false;
 let pendingLocalMutationCount = 0;
+let confirmationDialogId = 0;
+let textInputDialogId = 0;
+const enqueueAppDialog = createAppDialogQueue();
 
 async function main() {
   bindGlobalKeys();
@@ -378,6 +420,7 @@ function currentAutomaticRefreshState() {
     hasProjectMenu: state.projectMenu !== null,
     hasTicketMenu: state.ticketMenu !== null,
     hasProjectRename: state.renamingProjectId !== null,
+    hasConfirmationDialog: hasActiveAppDialog(),
     hasOpenTaskSelector: document.querySelector("[data-task-selector].is-open") !== null,
     hasLocalMutation: pendingLocalMutationCount > 0,
     hasPendingImageUploads: pendingImageUploads.size > 0,
@@ -408,7 +451,8 @@ function render(options: RenderOptions = {}) {
   const isSettingsPage = state.activePage === "settings";
 
   appRoot.innerHTML = `
-    <div class="shell">
+    <div class="app-content"${renderAppContentIsolationAttrs()}>
+      <div class="shell">
       <aside class="sidebar">
         <div class="brand">
           <div class="brand-mark">.md</div>
@@ -472,12 +516,15 @@ function render(options: RenderOptions = {}) {
 
         ${isSettingsPage ? renderSettingsPage() : renderProjectWorkspace()}
       </section>
-    </div>
+      </div>
 
-    ${renderProjectMenu()}
-    ${renderTicketMenu()}
-    ${renderProjectRenameDialog()}
-    ${renderEditor()}
+      ${renderProjectMenu()}
+      ${renderTicketMenu()}
+      ${renderProjectRenameDialog()}
+      ${renderEditor()}
+    </div>
+    ${renderConfirmationDialog()}
+    ${renderTextInputDialog()}
   `;
 
   hydrateIcons();
@@ -486,9 +533,25 @@ function render(options: RenderOptions = {}) {
   restoreSearchFocusSnapshot(searchFocusSnapshot);
   restoreScrollSnapshot(scrollSnapshot);
 
+  if (state.confirmationDialog) {
+    focusConfirmationDialog();
+  }
+
+  if (state.textInputDialog) {
+    focusTextInputDialog();
+  }
+
   if (options.revealTicket) {
     revealTicketInList(options.revealTicket.id, options.revealTicket.block ?? "nearest");
   }
+}
+
+function renderAppContentIsolationAttrs() {
+  return hasActiveAppDialog() ? ' inert aria-hidden="true"' : "";
+}
+
+function hasActiveAppDialog() {
+  return state.confirmationDialog !== null || state.textInputDialog !== null;
 }
 
 function renderProjectWorkspace() {
@@ -859,6 +922,118 @@ function renderProjectRenameDialog() {
           </button>
         </footer>
       </form>
+    </div>
+  `;
+}
+
+function renderConfirmationDialog() {
+  const dialog = state.confirmationDialog;
+
+  if (!dialog) {
+    return "";
+  }
+
+  const titleId = `confirmation-title-${dialog.id}`;
+  const descriptionId = `confirmation-message-${dialog.id}`;
+  const confirmClass = confirmationConfirmButtonClass(dialog.config.kind);
+
+  return `
+    <div class="confirmation-backdrop" data-confirmation-dialog-id="${dialog.id}">
+      <section
+        class="confirmation-panel confirmation-${escapeAttr(dialog.config.kind)}"
+        data-confirmation-dialog
+        data-confirmation-dialog-id="${dialog.id}"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="${titleId}"
+        aria-describedby="${descriptionId}"
+        tabindex="-1"
+      >
+        <header class="confirmation-header">
+          <span class="confirmation-icon">${icon(dialog.config.icon)}</span>
+          <div>
+            <p class="eyebrow">Confirm</p>
+            <h3 id="${titleId}">${escapeHtml(dialog.title)}</h3>
+          </div>
+        </header>
+        <p id="${descriptionId}" class="confirmation-message">${escapeHtml(dialog.message)}</p>
+        <footer class="confirmation-actions">
+          <button
+            type="button"
+            class="ghost-button"
+            data-confirmation-action="cancel"
+            data-confirmation-default-focus
+          >
+            ${icon("x")}
+            <span>${escapeHtml(dialog.config.cancelLabel)}</span>
+          </button>
+          <button
+            type="button"
+            class="save-button ${confirmClass}"
+            data-confirmation-action="confirm"
+          >
+            ${icon(dialog.config.confirmIcon)}
+            <span>${escapeHtml(dialog.config.confirmLabel)}</span>
+          </button>
+        </footer>
+      </section>
+    </div>
+  `;
+}
+
+function renderTextInputDialog() {
+  const dialog = state.textInputDialog;
+
+  if (!dialog) {
+    return "";
+  }
+
+  const titleId = `text-input-title-${dialog.id}`;
+  const descriptionId = `text-input-message-${dialog.id}`;
+  const inputId = `text-input-value-${dialog.id}`;
+  const confirmClass = confirmationConfirmButtonClass(dialog.config.kind);
+
+  return `
+    <div class="confirmation-backdrop" data-text-input-dialog-id="${dialog.id}">
+      <section
+        class="confirmation-panel confirmation-${escapeAttr(dialog.config.kind)}"
+        data-text-input-dialog
+        data-text-input-dialog-id="${dialog.id}"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="${titleId}"
+        aria-describedby="${descriptionId}"
+        tabindex="-1"
+      >
+        <header class="confirmation-header">
+          <span class="confirmation-icon">${icon(dialog.config.icon)}</span>
+          <div>
+            <p class="eyebrow">Project</p>
+            <h3 id="${titleId}">${escapeHtml(dialog.title)}</h3>
+          </div>
+        </header>
+        <label class="confirmation-field" for="${inputId}">
+          <span id="${descriptionId}">${escapeHtml(dialog.message)}</span>
+          <input
+            id="${inputId}"
+            data-text-input-value
+            data-text-input-default-focus
+            value="${escapeAttr(dialog.value)}"
+            placeholder="${escapeAttr(dialog.placeholder)}"
+            autocomplete="off"
+          />
+        </label>
+        <footer class="confirmation-actions">
+          <button type="button" class="ghost-button" data-text-input-action="cancel">
+            ${icon("x")}
+            <span>${escapeHtml(dialog.config.cancelLabel)}</span>
+          </button>
+          <button type="button" class="save-button ${confirmClass}" data-text-input-action="confirm">
+            ${icon(dialog.config.confirmIcon)}
+            <span>${escapeHtml(dialog.config.confirmLabel)}</span>
+          </button>
+        </footer>
+      </section>
     </div>
   `;
 }
@@ -1616,6 +1791,8 @@ function bindEvents() {
   bindTicketEvents();
   bindMetadataEvents();
   bindEditorEvents();
+  bindConfirmationDialogEvents();
+  bindTextInputDialogEvents();
 }
 
 function bindSettingsEvents() {
@@ -1779,7 +1956,13 @@ function bindProjectEvents() {
             multiple: false,
             title: "Add project folder"
           })
-        : window.prompt("Project folder name");
+        : await requestTextInput("Project folder name", "Add project folder", {
+            kind: "default",
+            confirmLabel: "Add",
+            icon: "folder-plus",
+            confirmIcon: "folder-plus",
+            placeholder: "Project folder name"
+          });
 
       if (typeof path !== "string" || !path.trim()) {
         return;
@@ -2157,7 +2340,13 @@ async function removeProject(projectId: string) {
 
   const confirmed = await confirmAction(
     `Remove "${project.name}" from the project list? Its Markdown files and .tasks folder will stay on disk.`,
-    "Remove project"
+    "Remove project",
+    {
+      kind: "danger",
+      confirmLabel: "Remove",
+      icon: "trash-2",
+      confirmIcon: "trash-2"
+    }
   );
 
   if (!confirmed) {
@@ -2881,6 +3070,18 @@ function showEditorTitleDisplay(options: { focus?: boolean } = {}) {
 
 function bindGlobalKeys() {
   window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.confirmationDialog) {
+      event.preventDefault();
+      finishConfirmationDialog(state.confirmationDialog.id, false);
+      return;
+    }
+
+    if (event.key === "Escape" && state.textInputDialog) {
+      event.preventDefault();
+      finishTextInputDialog(state.textInputDialog.id, null);
+      return;
+    }
+
     if (event.key === "Escape" && state.renamingProjectId) {
       closeProjectRenameDialog();
       return;
@@ -2957,12 +3158,293 @@ async function confirmDiscardDraft() {
   return saveDraft({ flush: true });
 }
 
-async function confirmAction(message: string, title: string) {
-  if (isTauriRuntime) {
-    return confirm(message, { title, kind: "warning" });
+async function confirmAction(message: string, title: string, options: ConfirmationDialogOptions = {}) {
+  return enqueueAppDialog(() => openConfirmationDialog(message, title, options));
+}
+
+async function requestTextInput(message: string, title: string, options: TextInputDialogOptions = {}) {
+  return enqueueAppDialog(() => openTextInputDialog(message, title, options));
+}
+
+function openConfirmationDialog(message: string, title: string, options: ConfirmationDialogOptions) {
+  return new Promise<boolean>((resolve) => {
+    const previousFocus = captureDialogFocusTarget();
+
+    closeContextMenus({ shouldRender: false });
+    closeTaskSelector();
+
+    state.confirmationDialog = {
+      id: ++confirmationDialogId,
+      title,
+      message,
+      config: normalizeConfirmationDialogConfig(options),
+      resolve,
+      previousFocus: previousFocus.element,
+      previousFocusSelector: previousFocus.selector
+    };
+
+    render({ preserveScroll: true });
+  });
+}
+
+function openTextInputDialog(message: string, title: string, options: TextInputDialogOptions) {
+  return new Promise<string | null>((resolve) => {
+    const previousFocus = captureDialogFocusTarget();
+
+    closeContextMenus({ shouldRender: false });
+    closeTaskSelector();
+
+    state.textInputDialog = {
+      id: ++textInputDialogId,
+      title,
+      message,
+      value: options.initialValue ?? "",
+      placeholder: options.placeholder ?? "",
+      config: normalizeConfirmationDialogConfig({
+        kind: options.kind ?? "default",
+        confirmLabel: options.confirmLabel,
+        cancelLabel: options.cancelLabel,
+        icon: options.icon,
+        confirmIcon: options.confirmIcon
+      }),
+      resolve,
+      previousFocus: previousFocus.element,
+      previousFocusSelector: previousFocus.selector
+    };
+
+    render({ preserveScroll: true });
+  });
+}
+
+function captureDialogFocusTarget() {
+  const element = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+  return {
+    element,
+    selector: dialogFocusRestoreSelector(element)
+  };
+}
+
+function dialogFocusRestoreSelector(element: HTMLElement | null) {
+  if (!element) {
+    return null;
   }
 
-  return window.confirm(message);
+  const ticketId = element.dataset.ticketId ?? element.closest<HTMLElement>("[data-ticket-id]")?.dataset.ticketId;
+
+  if (ticketId) {
+    return `[data-ticket-id="${cssAttributeValue(ticketId)}"]`;
+  }
+
+  const projectId =
+    element.dataset.projectId ?? element.closest<HTMLElement>("[data-project-id]")?.dataset.projectId;
+
+  if (projectId) {
+    return `[data-project-id="${cssAttributeValue(projectId)}"]`;
+  }
+
+  const action = element.dataset.action;
+
+  if (action) {
+    return `[data-action="${cssAttributeValue(action)}"]`;
+  }
+
+  return null;
+}
+
+function cssAttributeValue(value: string) {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function bindConfirmationDialogEvents() {
+  const backdrop = document.querySelector<HTMLElement>(".confirmation-backdrop");
+  const dialog = document.querySelector<HTMLElement>("[data-confirmation-dialog]");
+
+  if (!backdrop || !dialog) {
+    return;
+  }
+
+  const dialogId = Number(dialog.dataset.confirmationDialogId);
+
+  backdrop.addEventListener("click", (event) => {
+    if (event.target === backdrop) {
+      finishConfirmationDialog(dialogId, false);
+    }
+  });
+
+  dialog.querySelectorAll<HTMLButtonElement>("[data-confirmation-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      finishConfirmationDialog(dialogId, button.dataset.confirmationAction === "confirm");
+    });
+  });
+
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      finishConfirmationDialog(dialogId, false);
+      return;
+    }
+
+    if (event.key === "Tab") {
+      trapConfirmationFocus(event, dialog);
+    }
+  });
+}
+
+function bindTextInputDialogEvents() {
+  const backdrop = document.querySelector<HTMLElement>("[data-text-input-dialog-id]");
+  const dialog = document.querySelector<HTMLElement>("[data-text-input-dialog]");
+  const input = dialog?.querySelector<HTMLInputElement>("[data-text-input-value]") ?? null;
+
+  if (!backdrop || !dialog || !input) {
+    return;
+  }
+
+  const dialogId = Number(dialog.dataset.textInputDialogId);
+
+  backdrop.addEventListener("click", (event) => {
+    if (event.target === backdrop) {
+      finishTextInputDialog(dialogId, null);
+    }
+  });
+
+  input.addEventListener("input", () => {
+    if (state.textInputDialog?.id === dialogId) {
+      state.textInputDialog.value = input.value;
+    }
+  });
+
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      finishTextInputDialog(dialogId, input.value);
+    }
+  });
+
+  dialog.querySelectorAll<HTMLButtonElement>("[data-text-input-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      finishTextInputDialog(dialogId, button.dataset.textInputAction === "confirm" ? input.value : null);
+    });
+  });
+
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      finishTextInputDialog(dialogId, null);
+      return;
+    }
+
+    if (event.key === "Tab") {
+      trapConfirmationFocus(event, dialog);
+    }
+  });
+}
+
+function trapConfirmationFocus(event: KeyboardEvent, dialog: HTMLElement) {
+  const focusable = Array.from(
+    dialog.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled)")
+  );
+
+  if (focusable.length === 0) {
+    event.preventDefault();
+    dialog.focus();
+    return;
+  }
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+    return;
+  }
+
+  if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function focusConfirmationDialog() {
+  const focusTarget =
+    document.querySelector<HTMLElement>("[data-confirmation-default-focus]") ??
+    document.querySelector<HTMLElement>("[data-confirmation-dialog]");
+
+  focusTarget?.focus({ preventScroll: true });
+}
+
+function focusTextInputDialog() {
+  const focusTarget =
+    document.querySelector<HTMLInputElement>("[data-text-input-default-focus]") ??
+    document.querySelector<HTMLElement>("[data-text-input-dialog]");
+
+  focusTarget?.focus({ preventScroll: true });
+
+  if (focusTarget instanceof HTMLInputElement) {
+    focusTarget.select();
+  }
+}
+
+function finishConfirmationDialog(dialogId: number, confirmed: boolean) {
+  const dialog = state.confirmationDialog;
+
+  if (!dialog || dialog.id !== dialogId) {
+    return;
+  }
+
+  state.confirmationDialog = null;
+  render({ preserveScroll: true });
+
+  restoreDialogFocus(dialog.previousFocus, dialog.previousFocusSelector);
+
+  dialog.resolve(confirmed);
+}
+
+function finishTextInputDialog(dialogId: number, value: string | null) {
+  const dialog = state.textInputDialog;
+
+  if (!dialog || dialog.id !== dialogId) {
+    return;
+  }
+
+  const submittedValue = normalizeTextInputDialogSubmission(value);
+
+  if (value !== null && !submittedValue) {
+    document.querySelector<HTMLInputElement>("[data-text-input-value]")?.focus({ preventScroll: true });
+    return;
+  }
+
+  state.textInputDialog = null;
+  render({ preserveScroll: true });
+
+  restoreDialogFocus(dialog.previousFocus, dialog.previousFocusSelector);
+
+  dialog.resolve(submittedValue);
+}
+
+function restoreDialogFocus(previousFocus: HTMLElement | null, previousFocusSelector: string | null) {
+  if (previousFocus?.isConnected) {
+    previousFocus.focus({ preventScroll: true });
+    return;
+  }
+
+  if (previousFocusSelector) {
+    const target = document.querySelector<HTMLElement>(previousFocusSelector);
+
+    if (target) {
+      target.focus({ preventScroll: true });
+      return;
+    }
+  }
+
+  document
+    .querySelector<HTMLElement>(
+      ".project-item.active, [data-action='import-project'], [data-action='archive-done'], .ticket-card"
+    )
+    ?.focus({ preventScroll: true });
 }
 
 function hasUnsavedDraft() {
@@ -3187,7 +3669,15 @@ async function deleteTicket(ticketId: string) {
 
   const ticket = getTicket(ticketId);
 
-  if (!ticket || !(await confirmAction(`Delete "${ticket.title}"?`, "Delete ticket"))) {
+  if (
+    !ticket ||
+    !(await confirmAction(`Delete "${ticket.title}"?`, "Delete ticket", {
+      kind: "danger",
+      confirmLabel: "Delete",
+      icon: "trash-2",
+      confirmIcon: "trash-2"
+    }))
+  ) {
     return;
   }
 
@@ -3238,7 +3728,13 @@ async function archiveDoneTickets() {
 
   const confirmed = await confirmAction(
     `Archive ${doneTickets.length} done ${doneTickets.length === 1 ? "task" : "tasks"}?`,
-    "Archive done tasks"
+    "Archive done tasks",
+    {
+      kind: "warning",
+      confirmLabel: "Archive",
+      icon: "archive",
+      confirmIcon: "archive"
+    }
   );
 
   if (!confirmed) {
