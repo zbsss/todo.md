@@ -63,6 +63,12 @@ import type {
   TicketDraft,
   WorkspaceInfo
 } from "./app/types";
+import {
+  automaticRefreshIntervalMs,
+  canRunAutomaticRefresh,
+  ticketsChanged,
+  workspaceInfoChanged
+} from "./app/autoRefresh";
 import { escapeAttr, escapeHtml } from "./markdown/escape";
 import { imageExtensionForMime, resolveMarkdownImageSrc } from "./markdown/images";
 import { renderMarkdown } from "./markdown/render";
@@ -184,12 +190,16 @@ const ticketAutoScroll: {
   velocity: 0
 };
 let ticketDropCleanupFrameId: number | null = null;
+let automaticRefreshTimer: ReturnType<typeof window.setInterval> | null = null;
+let isAutomaticRefreshRunning = false;
+let pendingLocalMutationCount = 0;
 
 async function main() {
   bindGlobalKeys();
   bindLayoutGuards();
   await bindWindowCloseGuards();
   await loadWorkspace();
+  startAutomaticRefresh();
 }
 
 async function loadWorkspace() {
@@ -224,6 +234,94 @@ async function loadTickets(projectId: string) {
   state.error = null;
   state.tickets = await api.listTickets(projectId);
   state.tickets.sort(sortTickets);
+}
+
+function startAutomaticRefresh() {
+  if (automaticRefreshTimer) {
+    return;
+  }
+
+  automaticRefreshTimer = window.setInterval(() => {
+    void refreshWorkspaceInBackground();
+  }, automaticRefreshIntervalMs);
+}
+
+async function refreshWorkspaceInBackground() {
+  if (isAutomaticRefreshRunning || !canRunAutomaticRefresh(currentAutomaticRefreshState())) {
+    return;
+  }
+
+  const selectedProjectId = state.selectedProjectId;
+  isAutomaticRefreshRunning = true;
+
+  try {
+    const workspace = await api.getWorkspaceInfo();
+    const nextSelectedProjectId =
+      selectedProjectId && workspace.projects.some((project) => project.id === selectedProjectId)
+        ? selectedProjectId
+        : workspace.projects[0]?.id ?? null;
+    const nextTickets = nextSelectedProjectId ? await api.listTickets(nextSelectedProjectId) : [];
+    nextTickets.sort(sortTickets);
+
+    if (
+      state.selectedProjectId !== selectedProjectId ||
+      !canRunAutomaticRefresh(currentAutomaticRefreshState())
+    ) {
+      return;
+    }
+
+    const nextSelectedTicketId =
+      state.selectedTicketId && nextTickets.some((ticket) => ticket.id === state.selectedTicketId)
+        ? state.selectedTicketId
+        : null;
+    const shouldRender =
+      workspaceInfoChanged(state.workspace, workspace) ||
+      state.selectedProjectId !== nextSelectedProjectId ||
+      state.selectedTicketId !== nextSelectedTicketId ||
+      ticketsChanged(state.tickets, nextTickets) ||
+      state.error !== null;
+
+    if (!shouldRender) {
+      return;
+    }
+
+    state.workspace = workspace;
+    state.selectedProjectId = nextSelectedProjectId;
+    state.selectedTicketId = nextSelectedTicketId;
+    state.tickets = nextTickets;
+    state.error = null;
+    render({ preserveScroll: true });
+  } catch (error) {
+    console.warn("Automatic refresh failed.", error);
+  } finally {
+    isAutomaticRefreshRunning = false;
+  }
+}
+
+function currentAutomaticRefreshState() {
+  return {
+    isLoading: state.isLoading,
+    hasDraft: state.draft !== null,
+    hasTicketDrag: state.draggingId !== null,
+    hasProjectDrag: state.draggingProjectId !== null,
+    hasProjectMenu: state.projectMenu !== null,
+    hasTicketMenu: state.ticketMenu !== null,
+    hasProjectRename: state.renamingProjectId !== null,
+    hasOpenTaskSelector: document.querySelector("[data-task-selector].is-open") !== null,
+    hasLocalMutation: pendingLocalMutationCount > 0,
+    hasPendingImageUploads: pendingImageUploads.size > 0,
+    hasActiveDraftSave: draftSavePromise !== null
+  };
+}
+
+async function trackLocalMutation<T>(mutation: Promise<T>) {
+  pendingLocalMutationCount += 1;
+
+  try {
+    return await mutation;
+  } finally {
+    pendingLocalMutationCount = Math.max(0, pendingLocalMutationCount - 1);
+  }
 }
 
 function render(options: RenderOptions = {}) {
@@ -1246,7 +1344,7 @@ function bindProjectEvents() {
       }
 
       try {
-        const project = await api.createProject(name);
+        const project = await trackLocalMutation(api.createProject(name));
         state.workspace?.projects.push(project);
         state.selectedProjectId = project.id;
         state.selectedTicketId = null;
@@ -1278,7 +1376,7 @@ function bindProjectEvents() {
         return;
       }
 
-      const project = await api.importProject(path);
+      const project = await trackLocalMutation(api.importProject(path));
       state.selectedProjectId = project.id;
       state.selectedTicketId = null;
       state.draft = null;
@@ -1558,7 +1656,7 @@ async function saveProjectName(name: string) {
   }
 
   try {
-    const updated = await api.updateProjectName(projectId, nextName);
+    const updated = await trackLocalMutation(api.updateProjectName(projectId, nextName));
     state.workspace = updateProjectInWorkspace(state.workspace, updated);
     state.renamingProjectId = null;
     state.renamingProjectName = "";
@@ -1633,7 +1731,7 @@ async function removeProject(projectId: string) {
   const nextProjectId = findNeighborProjectId(projectId);
 
   try {
-    const workspace = await api.removeProject(projectId);
+    const workspace = await trackLocalMutation(api.removeProject(projectId));
     state.workspace = workspace;
     state.projectMenu = null;
     state.renamingProjectId = null;
@@ -1718,7 +1816,7 @@ async function saveProjectOrder(projects: ProjectSummary[]) {
   render();
 
   try {
-    state.workspace = await api.reorderProjects(projects.map((project) => project.id));
+    state.workspace = await trackLocalMutation(api.reorderProjects(projects.map((project) => project.id)));
     render();
   } catch (error) {
     state.workspace = previousWorkspace;
@@ -1766,7 +1864,7 @@ function bindTicketEvents() {
         }
 
         try {
-          const ticket = await api.createTicket(state.selectedProjectId, status, title);
+          const ticket = await trackLocalMutation(api.createTicket(state.selectedProjectId, status, title));
           state.tickets.push(ticket);
           state.workspace = updateTicketCount(state.workspace, state.selectedProjectId, 1);
           input.value = "";
@@ -2470,7 +2568,7 @@ async function persistCurrentDraft() {
   const unusedImages = unusedDraftImages(draft);
   await cleanupTicketImages(projectId, unusedImages);
 
-  const updated = await api.updateTicket(projectId, ticketId, title, body, status, priority, size);
+  const updated = await trackLocalMutation(api.updateTicket(projectId, ticketId, title, body, status, priority, size));
 
   clearDraftSaveError();
   state.tickets = state.tickets.map((ticket) => (ticket.id === updated.id ? updated : ticket)).sort(sortTickets);
@@ -2591,7 +2689,7 @@ async function deleteTicket(ticketId: string) {
     await waitForActiveDraftSave();
     await waitForPendingImageUploads();
     await cleanupDraftImages();
-    await api.deleteTicket(state.selectedProjectId, ticket.id);
+    await trackLocalMutation(api.deleteTicket(state.selectedProjectId, ticket.id));
     state.tickets = state.tickets.filter((candidate) => candidate.id !== ticket.id);
     state.workspace = updateTicketCount(state.workspace, state.selectedProjectId, -1);
     state.ticketMenu = null;
@@ -2628,7 +2726,7 @@ async function cleanupDraftImages() {
 }
 
 async function cleanupTicketImages(projectId: string, imagePaths: string[]) {
-  await Promise.all(imagePaths.map((imagePath) => api.deleteTicketImage(projectId, imagePath)));
+  await Promise.all(imagePaths.map((imagePath) => trackLocalMutation(api.deleteTicketImage(projectId, imagePath))));
 }
 
 function unusedDraftImages(draft: TicketDraft) {
@@ -2662,7 +2760,7 @@ async function moveTicket(ticketId: string, status: Status, beforeId?: string) {
   render({ preserveScroll: true });
 
   try {
-    state.tickets = await api.reorderTickets(state.selectedProjectId, positions);
+    state.tickets = await trackLocalMutation(api.reorderTickets(state.selectedProjectId, positions));
     render({ preserveScroll: true });
   } catch (error) {
     showError(error, { preserveScroll: true });
@@ -3344,7 +3442,7 @@ async function chooseTableSelectorValue(value: string | undefined, source: HTMLE
   focusTicket(nextTicket.id);
 
   try {
-    const updated = await api.updateTicket(
+    const updated = await trackLocalMutation(api.updateTicket(
       projectId,
       nextTicket.id,
       nextTicket.title,
@@ -3352,7 +3450,7 @@ async function chooseTableSelectorValue(value: string | undefined, source: HTMLE
       nextTicket.status,
       nextTicket.priority ?? null,
       nextTicket.size ?? null
-    );
+    ));
     state.tickets = state.tickets.map((candidate) => (candidate.id === updated.id ? updated : candidate)).sort(sortTickets);
     render({ preserveScroll: true });
     focusTicket(updated.id);
@@ -3673,10 +3771,10 @@ async function pasteImageIntoEditor(image: PastedImage, view: EditorView) {
   try {
     const buffer = await image.file.arrayBuffer();
     const bytes = Array.from(new Uint8Array(buffer));
-    const saved = await api.saveTicketImage(projectId, draftId, image.mimeType, bytes);
+    const saved = await trackLocalMutation(api.saveTicketImage(projectId, draftId, image.mimeType, bytes));
 
     if (markdownEditorView !== view || state.selectedProjectId !== projectId || state.draft?.id !== draftId) {
-      await api.deleteTicketImage(projectId, saved.markdownPath);
+      await trackLocalMutation(api.deleteTicketImage(projectId, saved.markdownPath));
       return;
     }
 
@@ -3687,7 +3785,7 @@ async function pasteImageIntoEditor(image: PastedImage, view: EditorView) {
     );
 
     if (!inserted) {
-      await api.deleteTicketImage(projectId, saved.markdownPath);
+      await trackLocalMutation(api.deleteTicketImage(projectId, saved.markdownPath));
       return;
     }
 
