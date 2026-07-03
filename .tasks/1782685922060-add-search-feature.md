@@ -1,10 +1,10 @@
 ---
 id: 1782685922060-add-search-feature
 title: Design search feature
-status: todo
+status: draft
 rank: 2
 created_at: 1782685922060
-updated_at: 1783038666919
+updated_at: 1783099228182
 priority: P1
 size: XL
 ---
@@ -16,4 +16,4 @@ size: XL
 
 Note for why backend could be a good choice: in the future we plan to add a CLI that will allow AI Agnets to work with tasks. If search is on the backend, the CLI could use the same search functionality as the App.
 
-Research the problem and write a design for it.
+Research the problem and write a plan/design for it under docs/

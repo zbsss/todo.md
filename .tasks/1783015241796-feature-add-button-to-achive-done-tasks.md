@@ -1,10 +1,10 @@
 ---
 id: 1783015241796-feature-add-button-to-achive-done-tasks
 title: Feature: Add button to achive `done` tasks
-status: todo
+status: ready
 rank: 8
 created_at: 1783015241797
-updated_at: 1783035524317
+updated_at: 1783099140948
 priority: P1
 size: S
 ---

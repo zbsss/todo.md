@@ -4,7 +4,7 @@ title: Add dependencies between tasks
 status: todo
 rank: 4
 created_at: 1782675368200
-updated_at: 1783035526766
+updated_at: 1783095233804
 priority: P1
 size: L
 ---
@@ -15,3 +15,6 @@ in the Ticket view add a new tab that shows the list of depenencies and lets you
 When adding deps it should give you option to search existing tickets and select them.
 
 When task is blocked it shoud show a blocked icon on the task card on the board. If it has child depndencies it should show some icon with count on the task card on the board.
+
+Depends on: /Users/michalkurleto/code/todo-md/.tasks/1782685922060-add-search-feature.md
+Search is needed so we can easily find tickets to add as depdencies

@@ -1,14 +1,14 @@
 ---
 id: 1782686404885-add-listtable-view
 title: Add table view
-status: doing
+status: done
 rank: 8
 created_at: 1782686404885
-updated_at: 1783034934320
+updated_at: 1783043931374
+pr_link: https://github.com/zbsss/todo.md/pull/27
+assignee: codex://threads/019f250e-fd8c-7170-82b3-b9e146419f01
 priority: P0
 size: XL
-assignee: codex://threads/019f250e-fd8c-7170-82b3-b9e146419f01
-pr_link: https://github.com/zbsss/todo.md/pull/27
 ---
 
 - allow sorting based on column values
