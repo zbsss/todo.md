@@ -74,6 +74,7 @@ import {
 } from "./markdown/title";
 import { findTaskSelectorFromTarget } from "./taskSelectorClose";
 import { insertTicket, rankForInsertion, sortTickets } from "./tickets/ordering";
+import { ticketPathRelativeToProject } from "./tickets/paths";
 import {
   defaultTableSorts,
   sortTicketsForTable,
@@ -444,9 +445,13 @@ function renderTicketMenu() {
       style="left: ${state.ticketMenu.x}px; top: ${state.ticketMenu.y}px;"
       aria-label="${escapeAttr(ticket.title)} task menu"
     >
-      <button data-ticket-action="copy-ticket-path" data-ticket-id="${escapeAttr(ticket.id)}" role="menuitem">
+      <button data-ticket-action="copy-ticket-absolute-path" data-ticket-id="${escapeAttr(ticket.id)}" role="menuitem">
         ${icon("copy")}
-        <span>Copy path</span>
+        <span>Copy absolute path</span>
+      </button>
+      <button data-ticket-action="copy-ticket-relative-path" data-ticket-id="${escapeAttr(ticket.id)}" role="menuitem">
+        ${icon("copy")}
+        <span>Copy relative path</span>
       </button>
       <button
         class="danger"
@@ -1584,7 +1589,7 @@ async function copyProjectPath(projectId: string) {
   }
 }
 
-async function copyTicketPath(ticketId: string) {
+async function copyTicketPath(ticketId: string, pathKind: "absolute" | "relative") {
   const ticket = getTicket(ticketId);
 
   if (!ticket) {
@@ -1593,11 +1598,20 @@ async function copyTicketPath(ticketId: string) {
   }
 
   try {
-    await copyText(ticket.filePath);
+    await copyText(ticketPathForCopy(ticket, pathKind));
     closeTicketMenu();
   } catch (error) {
     showError(error);
   }
+}
+
+function ticketPathForCopy(ticket: Ticket, pathKind: "absolute" | "relative") {
+  if (pathKind === "absolute") {
+    return ticket.filePath;
+  }
+
+  const project = state.selectedProjectId ? getProject(state.selectedProjectId) : null;
+  return project ? ticketPathRelativeToProject(ticket.filePath, project.path) : ticket.filePath;
 }
 
 async function openProject(projectId: string) {
@@ -1790,8 +1804,12 @@ function bindTicketEvents() {
         return;
       }
 
-      if (action === "copy-ticket-path") {
-        void copyTicketPath(ticketId);
+      if (action === "copy-ticket-absolute-path") {
+        void copyTicketPath(ticketId, "absolute");
+      }
+
+      if (action === "copy-ticket-relative-path") {
+        void copyTicketPath(ticketId, "relative");
       }
 
       if (action === "delete-ticket") {
