@@ -505,9 +505,6 @@ function renderLoadingBoard() {
   if (state.selectedProjectId && currentProjectViewMode() === "table") {
     return `
       <div class="table-view">
-        <div class="table-summary">
-          <div class="skeleton table-summary-skeleton"></div>
-        </div>
         <div class="task-table-scroll">
           <table class="task-table" aria-label="Loading task table">
             <thead>
@@ -583,9 +580,6 @@ function renderTableView() {
 
   return `
     <div class="table-view" aria-label="Task table">
-      <div class="table-summary">
-        <span>${tickets.length} ${tickets.length === 1 ? "task" : "tasks"}</span>
-      </div>
       <div class="task-table-scroll">
         <table class="task-table">
           <thead>
