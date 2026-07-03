@@ -692,7 +692,7 @@ function renderSettingsPage() {
             </div>
             <div class="ticket-task-metadata">
               <span class="task-chip task-chip-priority task-priority-p2">P2</span>
-              <span class="task-chip task-chip-size">XL</span>
+              <span class="task-chip task-chip-size task-size-xl">XL</span>
             </div>
             <div class="markdown card-markdown">
               <p>Review active tickets, tune contrast, and ship a calm theme.</p>
@@ -1243,7 +1243,9 @@ function renderTicketTaskMetadata(ticket: Ticket) {
     ticket.priority
       ? `<span class="task-chip task-chip-priority task-priority-${ticket.priority.toLowerCase()}" title="Priority ${ticket.priority}">${escapeHtml(ticket.priority)}</span>`
       : "",
-    ticket.size ? `<span class="task-chip task-chip-size" title="Size ${ticket.size}">${escapeHtml(ticket.size)}</span>` : ""
+    ticket.size
+      ? `<span class="task-chip task-chip-size task-size-${ticket.size.toLowerCase()}" title="Size ${ticket.size}">${escapeHtml(ticket.size)}</span>`
+      : ""
   ].filter(Boolean);
 
   if (!chips.length) {
@@ -1599,6 +1601,10 @@ function taskSelectorMarkClass(kind: TaskSelectorKind, value: string) {
 
   if (kind === "priority" && value) {
     classes.push(`task-priority-${value.toLowerCase()}`);
+  }
+
+  if (kind === "size" && value) {
+    classes.push(`task-size-${value.toLowerCase()}`);
   }
 
   if (kind !== "status" && !value) {
