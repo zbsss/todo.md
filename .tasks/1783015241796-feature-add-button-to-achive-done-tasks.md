@@ -4,7 +4,7 @@ title: Feature: Add button to achive `done` tasks
 status: ready
 rank: 8
 created_at: 1783015241797
-updated_at: 1783099140948
+updated_at: 1783106087476
 priority: P1
 size: S
 ---

@@ -4,7 +4,7 @@ title: Fix: Priority/Status/Size picker doesn’t close when clicking outside of
 status: ready
 rank: 0V
 created_at: 1783044604594
-updated_at: 1783099281030
+updated_at: 1783106089881
 priority: P0
 size: S
 ---
