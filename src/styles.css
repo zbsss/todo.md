@@ -285,6 +285,8 @@ select:focus {
 }
 
 .project-item {
+  --project-item-shadow: inset 0 0 0 0 transparent;
+  --project-item-focus-ring: inset 0 0 0 0 transparent;
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr) 18px;
   gap: 10px;
@@ -296,6 +298,7 @@ select:focus {
   background: transparent;
   color: var(--ink);
   text-align: left;
+  box-shadow: var(--project-item-shadow), var(--project-item-focus-ring);
   transition:
     background 120ms ease,
     box-shadow 120ms ease,
@@ -309,9 +312,14 @@ select:focus {
 }
 
 .project-item.active {
-  box-shadow:
+  --project-item-shadow:
     inset 3px 0 0 var(--accent),
     inset 0 0 0 1px rgba(35, 108, 90, 0.16);
+}
+
+.project-item:focus-visible {
+  --project-item-focus-ring: inset 0 0 0 3px rgba(190, 122, 184, 0.72);
+  outline: none;
 }
 
 .project-item.is-project-dragging {
