@@ -1,13 +1,14 @@
 ---
 id: 1782685922060-add-search-feature
 title: Design search feature
-status: doing
+status: review
 rank: 2
 created_at: 1782685922060
-updated_at: 1783107396055
+updated_at: 1783108260183
 priority: P1
 size: XL
 assignee: codex://threads/019f297a-e4ea-75a1-b248-89d3b1d656d5
+pr_link: https://github.com/zbsss/todo.md/pull/36
 ---
 
 - We want to allow to search tasks in project. When typing, the tasks should be filtered out live from the board, and the matched text shoud be highlighted (even if it's deep in the description of the task, it should show up highlighted below the title). It should use full text search, including title, description, and metadata of the task.
