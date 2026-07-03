@@ -1976,6 +1976,25 @@ function bindTableTicketEvents() {
     }
   });
 
+  table?.addEventListener("contextmenu", (event) => {
+    const target = event.target as HTMLElement;
+
+    if (target.closest("a[data-table-link]")) {
+      return;
+    }
+
+    const row = target.closest<HTMLElement>(".task-table-row");
+    const ticketId = row?.dataset.ticketId;
+
+    if (!row || !ticketId) {
+      return;
+    }
+
+    event.preventDefault();
+    closeTaskSelector();
+    openTicketMenu(ticketId, event.clientX, event.clientY);
+  });
+
   document.querySelectorAll<HTMLElement>(".task-table-row").forEach((row) => {
     row.addEventListener("keydown", (event) => {
       if (event.target !== row) {
