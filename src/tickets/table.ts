@@ -1,7 +1,7 @@
 import type { TaskPriority, TaskSize, Ticket } from "../app/types";
 import { sortTickets, statusIndex } from "./ordering";
 
-export type TableColumn = "title" | "status" | "assignee" | "priority" | "size" | "pr";
+export type TableColumn = "title" | "status" | "dependencies" | "assignee" | "priority" | "size" | "pr";
 export type SortDirection = "asc" | "desc";
 export type TableSort = {
   column: TableColumn;
@@ -23,7 +23,7 @@ export function sortTicketsForTable(tickets: Ticket[], sort: TableSort | null) {
 }
 
 export function tableColumns(): TableColumn[] {
-  return ["title", "status", "priority", "size", "assignee", "pr"];
+  return ["title", "status", "dependencies", "priority", "size", "assignee", "pr"];
 }
 
 function compareTicketsForSorts(a: Ticket, b: Ticket, sorts: TableSort[]) {
@@ -71,6 +71,15 @@ function tableColumnText(ticket: Ticket, column: TableColumn) {
 
   if (column === "size") {
     return (ticket.size ?? "none").toLowerCase();
+  }
+
+  if (column === "dependencies") {
+    return [
+      ticket.blockedBy.length.toString().padStart(4, "0"),
+      ticket.subtasks.length.toString().padStart(4, "0"),
+      ticket.parent.length.toString().padStart(4, "0"),
+      ticket.blocks.length.toString().padStart(4, "0")
+    ].join(":");
   }
 
   if (column === "pr") {

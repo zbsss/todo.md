@@ -34,6 +34,7 @@ execFileSync(
     resolve(repoRoot, "src/tickets/ordering.ts"),
     resolve(repoRoot, "src/tickets/paths.ts"),
     resolve(repoRoot, "src/tickets/table.ts"),
+    resolve(repoRoot, "src/tickets/dependencies.ts"),
     resolve(repoRoot, "src/api/mockStore.ts"),
     resolve(repoRoot, "src/markdown/escape.ts"),
     resolve(repoRoot, "src/markdown/render.ts"),
@@ -50,6 +51,7 @@ execFileSync(
 const ordering = await import(pathToFileURL(join(outDir, "tickets/ordering.js")).href);
 const paths = await import(pathToFileURL(join(outDir, "tickets/paths.js")).href);
 const table = await import(pathToFileURL(join(outDir, "tickets/table.js")).href);
+const dependencies = await import(pathToFileURL(join(outDir, "tickets/dependencies.js")).href);
 const search = await import(pathToFileURL(join(outDir, "api/mockStore.js")).href);
 const markdown = await import(pathToFileURL(join(outDir, "markdown/render.js")).href);
 const title = await import(pathToFileURL(join(outDir, "markdown/title.js")).href);
@@ -79,6 +81,25 @@ function project(id) {
     name: id,
     path: `/projects/${id}`,
     ticketCount: 0
+  };
+}
+
+function memoryStorage() {
+  const values = new Map();
+
+  return {
+    clear() {
+      values.clear();
+    },
+    getItem(key) {
+      return values.has(key) ? values.get(key) : null;
+    },
+    removeItem(key) {
+      values.delete(key);
+    },
+    setItem(key, value) {
+      values.set(key, String(value));
+    }
   };
 }
 
@@ -180,6 +201,91 @@ test("sortTicketsForTable defaults to status then priority", () => {
     "doing-p1",
     "done-p0"
   ]);
+});
+
+test("dependencyChipSummary counts active blockers, completed subtasks, and missing references", () => {
+  const tickets = [
+    ticket({
+      id: "current",
+      subtasks: ["done-child", "open-child", "missing-child"],
+      blockedBy: ["done-blocker", "open-blocker", "missing-blocker"]
+    }),
+    ticket({ id: "done-child", status: "done" }),
+    ticket({ id: "open-child", status: "doing" }),
+    ticket({ id: "done-blocker", status: "done" }),
+    ticket({ id: "open-blocker", status: "ready" })
+  ];
+  const lookup = dependencies.createDependencyLookup(tickets);
+
+  assert.deepEqual(dependencies.dependencyChipSummary(tickets[0], lookup), {
+    blockers: {
+      active: 2,
+      total: 3,
+      missing: 1
+    },
+    subtasks: {
+      total: 3,
+      completed: 1,
+      missing: 1
+    }
+  });
+});
+
+test("mock store dependency updates are symmetric and no-op links do not touch timestamps", async () => {
+  globalThis.localStorage = memoryStorage();
+  const store = search.createMockStore();
+  const before = await store.listTickets("inbox");
+  const prepBefore = before.find((item) => item.id === "prep-ai-ready-ticket");
+  const sketchBefore = before.find((item) => item.id === "sketch-board-columns");
+
+  await store.setTicketDependency("inbox", "prep-ai-ready-ticket", "sketch-board-columns", "subtask", true);
+
+  const afterNoop = await store.listTickets("inbox");
+  assert.equal(afterNoop.find((item) => item.id === "prep-ai-ready-ticket").updatedAt, prepBefore.updatedAt);
+  assert.equal(afterNoop.find((item) => item.id === "sketch-board-columns").updatedAt, sketchBefore.updatedAt);
+
+  await store.setTicketDependency("inbox", "capture-app-ideas", "prep-ai-ready-ticket", "blocks", true);
+
+  const afterLink = await store.listTickets("inbox");
+  assert.deepEqual(afterLink.find((item) => item.id === "capture-app-ideas").blocks, ["prep-ai-ready-ticket"]);
+  assert.deepEqual(afterLink.find((item) => item.id === "prep-ai-ready-ticket").blockedBy, ["capture-app-ideas"]);
+
+  await store.setTicketDependency("inbox", "capture-app-ideas", "prep-ai-ready-ticket", "blocks", false);
+
+  const afterUnlink = await store.listTickets("inbox");
+  assert.deepEqual(afterUnlink.find((item) => item.id === "capture-app-ideas").blocks, []);
+  assert.deepEqual(afterUnlink.find((item) => item.id === "prep-ai-ready-ticket").blockedBy, []);
+});
+
+test("mock store normalizes dependency ids like disk tickets", async () => {
+  globalThis.localStorage = memoryStorage();
+  globalThis.localStorage.setItem(
+    "todo.md-demo",
+    JSON.stringify({
+      workspace: {
+        baseDir: "/projects",
+        projects: [project("inbox")]
+      },
+      tickets: {
+        inbox: [
+          ticket({
+            id: "current",
+            parent: ["parent-ok", "bad/path", "current", ""],
+            subtasks: "child-one child-two",
+            blocks: "[blocked-one, blocked_two]",
+            blockedBy: ["blocker ok", "blocker-ok"]
+          })
+        ]
+      }
+    })
+  );
+  const store = search.createMockStore();
+  const [normalized] = await store.listTickets("inbox");
+
+  assert.deepEqual(normalized.parent, ["parent-ok"]);
+  assert.deepEqual(normalized.subtasks, ["child-one", "child-two"]);
+  assert.deepEqual(normalized.blocks, ["blocked-one", "blocked_two"]);
+  assert.deepEqual(normalized.blockedBy, ["blocker-ok"]);
 });
 
 test("normalizeStatus maps legacy todo to draft", () => {

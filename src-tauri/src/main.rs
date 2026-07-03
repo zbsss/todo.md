@@ -28,6 +28,7 @@ fn main() {
             commands::search_tickets,
             commands::create_ticket,
             commands::update_ticket,
+            commands::set_ticket_dependency,
             commands::save_ticket_image,
             commands::delete_ticket_image,
             commands::reorder_tickets,

@@ -7,8 +7,8 @@ use crate::{
         allow_project_image_assets, delete_ticket_image_from_project, save_ticket_image_to_project,
     },
     models::{
-        ProjectDiskMeta, ProjectRecord, ProjectSummary, SavedTicketImage, Ticket, TicketPosition,
-        TicketUpdate, WorkspaceInfo,
+        ProjectDiskMeta, ProjectRecord, ProjectSummary, SavedTicketImage, Ticket,
+        TicketDependencyUpdate, TicketPosition, TicketUpdate, WorkspaceInfo,
     },
     paths::{canonical_project_path, default_projects_dir, ensure_tasks_dir},
     projects::{
@@ -23,9 +23,9 @@ use crate::{
     search::search_tickets_from_disk,
     text::{clean_title, normalize_newlines, now_millis, safe_segment, title_from_slug},
     tickets::{
-        apply_ticket_positions, archive_done_tickets as archive_done_tickets_on_disk,
-        list_tickets_from_disk, next_rank, read_ticket, unique_ticket_id, validate_status,
-        write_ticket,
+        apply_ticket_dependency, apply_ticket_positions,
+        archive_done_tickets as archive_done_tickets_on_disk, list_tickets_from_disk, next_rank,
+        read_ticket, unique_ticket_id, validate_status, write_ticket,
     },
 };
 
@@ -237,6 +237,10 @@ pub(crate) fn create_ticket(
         size: None,
         pr_link: None,
         assignee: None,
+        parent: Vec::new(),
+        subtasks: Vec::new(),
+        blocks: Vec::new(),
+        blocked_by: Vec::new(),
     };
 
     write_ticket(&project_dir, ticket)
@@ -261,6 +265,24 @@ pub(crate) fn update_ticket(
     ticket.updated_at = now_millis();
 
     write_ticket(&project_dir, ticket)
+}
+
+#[tauri::command]
+pub(crate) fn set_ticket_dependency(
+    app: AppHandle,
+    project_id: String,
+    ticket_id: String,
+    update: TicketDependencyUpdate,
+) -> Result<Vec<Ticket>, String> {
+    let project_dir = project_dir(&app, &project_id)?;
+
+    apply_ticket_dependency(
+        &project_dir,
+        &ticket_id,
+        &update.related_ticket_id,
+        &update.relationship,
+        update.linked,
+    )
 }
 
 #[tauri::command]

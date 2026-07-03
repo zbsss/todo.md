@@ -5,6 +5,7 @@ import type {
   TaskPriority,
   TaskSize,
   Ticket,
+  TicketDependencyRelationship,
   TicketDraft,
   TicketSearchField,
   TicketSearchMatch,
@@ -55,7 +56,11 @@ export function createMockStore() {
             updatedAt: now,
             filePath: "~/todo.md/projects/inbox/capture-app-ideas.md",
             priority: "P2",
-            size: "M"
+            size: "M",
+            parent: [],
+            subtasks: [],
+            blocks: [],
+            blockedBy: []
           },
           {
             id: "prep-ai-ready-ticket",
@@ -67,7 +72,11 @@ export function createMockStore() {
             updatedAt: now,
             filePath: "~/todo.md/projects/inbox/prep-ai-ready-ticket.md",
             priority: "P1",
-            size: "S"
+            size: "S",
+            parent: [],
+            subtasks: ["sketch-board-columns"],
+            blocks: [],
+            blockedBy: []
           },
           {
             id: "sketch-board-columns",
@@ -81,7 +90,11 @@ export function createMockStore() {
             priority: "P1",
             size: "S",
             prLink: "https://github.com/zbsss/todo.md/pull/22",
-            assignee: "codex://threads/019f239d-dd6d-7451-856c-3847cadaf912"
+            assignee: "codex://threads/019f239d-dd6d-7451-856c-3847cadaf912",
+            parent: ["prep-ai-ready-ticket"],
+            subtasks: [],
+            blocks: ["review-agent-pr"],
+            blockedBy: []
           },
           {
             id: "review-agent-pr",
@@ -95,7 +108,11 @@ export function createMockStore() {
             priority: "P2",
             size: "M",
             prLink: "https://github.com/zbsss/todo.md/pull/23",
-            assignee: "codex://threads/019f239d-dd6d-7451-856c-3847cadaf913"
+            assignee: "codex://threads/019f239d-dd6d-7451-856c-3847cadaf913",
+            parent: [],
+            subtasks: [],
+            blocks: [],
+            blockedBy: ["sketch-board-columns"]
           },
           {
             id: "keep-tickets-local",
@@ -105,7 +122,11 @@ export function createMockStore() {
             rank: rankBetween(),
             createdAt: now,
             updatedAt: now,
-            filePath: "~/todo.md/projects/inbox/keep-tickets-local.md"
+            filePath: "~/todo.md/projects/inbox/keep-tickets-local.md",
+            parent: [],
+            subtasks: [],
+            blocks: [],
+            blockedBy: []
           }
         ]
       }
@@ -236,7 +257,11 @@ export function createMockStore() {
         rank: nextRank(store.tickets[projectId] ?? [], status),
         createdAt: now,
         updatedAt: now,
-        filePath: `~/todo.md/projects/${projectId}/${id}.md`
+        filePath: `~/todo.md/projects/${projectId}/${id}.md`,
+        parent: [],
+        subtasks: [],
+        blocks: [],
+        blockedBy: []
       };
 
       store.tickets[projectId] = [...(store.tickets[projectId] ?? []), ticket];
@@ -282,6 +307,48 @@ export function createMockStore() {
       }
 
       return updated;
+    },
+    async setTicketDependency(
+      projectId: string,
+      ticketId: string,
+      relatedTicketId: string,
+      relationship: TicketDependencyRelationship,
+      linked: boolean
+    ) {
+      const store = read();
+      const tickets = store.tickets[projectId] ?? [];
+      const ticketIndex = tickets.findIndex((ticket) => ticket.id === ticketId);
+      const relatedIndex = tickets.findIndex((ticket) => ticket.id === relatedTicketId);
+
+      if (ticketIndex < 0 || (linked && relatedIndex < 0)) {
+        throw new Error("Ticket not found.");
+      }
+
+      if (ticketId === relatedTicketId) {
+        throw new Error("A ticket cannot depend on itself.");
+      }
+
+      const now = Date.now();
+      const nextTickets = tickets.map((ticket) => ({ ...ticket }));
+      const { changedRelated, changedTicket } = applyMockDependencyChange(
+        nextTickets[ticketIndex],
+        relatedIndex >= 0 ? nextTickets[relatedIndex] : null,
+        relationship,
+        relatedTicketId,
+        linked
+      );
+
+      if (changedTicket) {
+        nextTickets[ticketIndex].updatedAt = now;
+      }
+
+      if (changedRelated && relatedIndex >= 0) {
+        nextTickets[relatedIndex].updatedAt = now;
+      }
+      store.tickets[projectId] = nextTickets;
+      write(store);
+
+      return nextTickets;
     },
     async saveTicketImage(projectId: string, ticketId: string, mimeType: string, bytes: number[]) {
       const store = read();
@@ -773,6 +840,83 @@ function sortTicketIds(first: Ticket, second: Ticket) {
   return first.id.localeCompare(second.id);
 }
 
+function applyMockDependencyChange(
+  ticket: Ticket,
+  relatedTicket: Ticket | null,
+  relationship: TicketDependencyRelationship,
+  relatedTicketId: string,
+  linked: boolean
+) {
+  const [field, inverseField] = dependencyFieldsForRelationship(relationship);
+  const changedTicket = applyMockDependencyId(ticket, field, relatedTicketId, linked);
+  const changedRelated = relatedTicket ? applyMockDependencyId(relatedTicket, inverseField, ticket.id, linked) : false;
+
+  return { changedTicket, changedRelated };
+}
+
+type DependencyFieldName = "parent" | "subtasks" | "blocks" | "blockedBy";
+
+function dependencyFieldsForRelationship(
+  relationship: TicketDependencyRelationship
+): [DependencyFieldName, DependencyFieldName] {
+  if (relationship === "parent") {
+    return ["parent", "subtasks"];
+  }
+
+  if (relationship === "subtask") {
+    return ["subtasks", "parent"];
+  }
+
+  if (relationship === "blocks") {
+    return ["blocks", "blockedBy"];
+  }
+
+  return ["blockedBy", "blocks"];
+}
+
+function applyMockDependencyId(ticket: Ticket, field: DependencyFieldName, id: string, linked: boolean) {
+  const before = normalizeDependencyIds(ticket[field], ticket.id);
+  const next = linked
+    ? normalizeDependencyIds([...before, id], ticket.id)
+    : before.filter((candidate) => candidate !== id);
+
+  ticket[field] = next;
+
+  return dependencyIdsChanged(before, next);
+}
+
+function normalizeDependencyIds(value: unknown, selfId?: string): string[] {
+  if (Array.isArray(value)) {
+    return Array.from(
+      new Set(
+        value
+          .filter((item): item is string => typeof item === "string")
+          .map((item) => item.trim())
+          .filter((item) => isSafeDependencyId(item) && item !== selfId)
+      )
+    );
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    return normalizeDependencyIds(parseDependencyIdString(value), selfId);
+  }
+
+  return [];
+}
+
+function parseDependencyIdString(value: string) {
+  const cleaned = value.trim().replace(/^\[/, "").replace(/\]$/, "").trim();
+  return cleaned.split(/[,\s]+/).map((id) => id.trim().replace(/^['"]|['"]$/g, ""));
+}
+
+function isSafeDependencyId(value: string) {
+  return /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+function dependencyIdsChanged(current: string[], next: string[]) {
+  return current.length !== next.length || current.some((id, index) => id !== next[index]);
+}
+
 function nextRank(tickets: Ticket[], status: Status) {
   const previousRank = tickets
     .filter((ticket) => ticket.status === status)
@@ -795,7 +939,11 @@ function normalizeStore(store: MockStore) {
           status: normalizeStatus(ticket.status as string | undefined),
           priority: isTaskPriority(ticket.priority) ? ticket.priority : undefined,
           size: isTaskSize(ticket.size) ? ticket.size : undefined,
-          rank: ticket.rank ?? rankFromLegacyOrder(order ?? 0, ticket.title, ticket.filePath)
+          rank: ticket.rank ?? rankFromLegacyOrder(order ?? 0, ticket.title, ticket.filePath),
+          parent: normalizeDependencyIds(ticket.parent, ticket.id),
+          subtasks: normalizeDependencyIds(ticket.subtasks, ticket.id),
+          blocks: normalizeDependencyIds(ticket.blocks, ticket.id),
+          blockedBy: normalizeDependencyIds(ticket.blockedBy, ticket.id)
         };
       })
     ])

@@ -24,6 +24,7 @@ import {
   Archive,
   ArrowDown,
   ArrowUp,
+  Ban,
   Check,
   ChevronDown,
   CircleCheck,
@@ -34,7 +35,10 @@ import {
   FolderOpen,
   FolderPlus,
   GripVertical,
+  GitBranch,
+  Link,
   ListTodo,
+  ListTree,
   LoaderCircle,
   Moon,
   Palette,
@@ -48,6 +52,7 @@ import {
   Table2,
   Trash2,
   Type,
+  Unlink,
   X
 } from "lucide";
 import { createApi } from "./api/client";
@@ -76,6 +81,7 @@ import type {
   TaskPriority,
   TaskSize,
   Ticket,
+  TicketDependencyRelationship,
   TicketDraft,
   TicketSearchField,
   TicketSearchMatch,
@@ -116,6 +122,15 @@ import {
   type AppFont,
   type ColorScheme
 } from "./settings/appearance";
+import {
+  createDependencyLookup,
+  dependencyChipSummary,
+  dependencyReferences,
+  hasDependencyLinks,
+  uniqueDependencyIds,
+  type DependencyLookup,
+  type DependencyReference
+} from "./tickets/dependencies";
 import { insertTicket, rankForInsertion, sortTickets } from "./tickets/ordering";
 import { ticketPathRelativeToProject } from "./tickets/paths";
 import { canQuickAddTicket } from "./tickets/quickAdd";
@@ -156,6 +171,16 @@ type ActivePage = "project" | "settings";
 
 type ProjectViewMode = "board" | "table";
 
+type EditorTab = "description" | "dependencies";
+
+type DependencyPickerState = {
+  relationship: TicketDependencyRelationship;
+  query: string;
+  pending: boolean;
+  results: TicketSearchResult[];
+  requestSeq: number;
+};
+
 type ProjectTableState = {
   sort: TableSort | null;
 };
@@ -171,7 +196,9 @@ const state: {
   selectedProjectId: string | null;
   tickets: Ticket[];
   selectedTicketId: string | null;
+  editorTab: EditorTab;
   draft: TicketDraft | null;
+  dependencyPicker: DependencyPickerState | null;
   draggingId: string | null;
   draggingProjectId: string | null;
   projectMenu: { projectId: string; x: number; y: number } | null;
@@ -195,7 +222,9 @@ const state: {
   selectedProjectId: null,
   tickets: [],
   selectedTicketId: null,
+  editorTab: "description",
   draft: null,
+  dependencyPicker: null,
   draggingId: null,
   draggingProjectId: null,
   projectMenu: null,
@@ -239,6 +268,7 @@ let isClosingWindow = false;
 const ticketAutoScrollEdge = 72;
 const ticketAutoScrollMaxSpeed = 360;
 const ticketSearchDebounceMs = 150;
+const dependencySearchDebounceMs = 150;
 const ticketAutoScroll: {
   frameId: number | null;
   lastTimestamp: number;
@@ -255,8 +285,10 @@ const ticketAutoScroll: {
 let ticketDropCleanupFrameId: number | null = null;
 let automaticRefreshTimer: ReturnType<typeof window.setInterval> | null = null;
 let ticketSearchDebounceTimer: ReturnType<typeof window.setTimeout> | null = null;
+let dependencySearchDebounceTimer: ReturnType<typeof window.setTimeout> | null = null;
 let isAutomaticRefreshRunning = false;
 let pendingLocalMutationCount = 0;
+let renderDependencyLookup: DependencyLookup | null = null;
 
 async function main() {
   bindGlobalKeys();
@@ -398,6 +430,7 @@ async function trackLocalMutation<T>(mutation: Promise<T>) {
 function render(options: RenderOptions = {}) {
   const scrollSnapshot = options.preserveScroll ? captureScrollSnapshot() : null;
   const searchFocusSnapshot = captureSearchFocusSnapshot();
+  renderDependencyLookup = createDependencyLookup(state.tickets);
 
   destroyMarkdownEditor();
 
@@ -479,6 +512,7 @@ function render(options: RenderOptions = {}) {
     ${renderProjectRenameDialog()}
     ${renderEditor()}
   `;
+  renderDependencyLookup = null;
 
   hydrateIcons();
   bindEvents();
@@ -1014,6 +1048,7 @@ function tableColumnConfigs(): Array<{ id: TableColumn; label: string }> {
   return [
     { id: "title", label: "Title" },
     { id: "status", label: "Status" },
+    { id: "dependencies", label: "Deps" },
     { id: "priority", label: "Priority" },
     { id: "size", label: "Size" },
     { id: "assignee", label: "Assignee" },
@@ -1088,6 +1123,9 @@ function renderTableRow(ticket: Ticket) {
           className: "table-selector"
         })}
       </td>
+      <td class="task-table-cell task-table-dependencies-cell">
+        ${renderTableDependencyCell(ticket)}
+      </td>
       <td class="task-table-cell task-table-priority-cell">
         ${renderTaskSelector("priority", ticket.priority, {
           owner: "table",
@@ -1110,6 +1148,12 @@ function renderTableRow(ticket: Ticket) {
       </td>
     </tr>
   `;
+}
+
+function renderTableDependencyCell(ticket: Ticket) {
+  const chips = renderDependencyChipButtons(ticket, "table");
+
+  return chips ? `<div class="dependency-chips dependency-chips-table">${chips}</div>` : `<span class="table-muted">Empty</span>`;
 }
 
 function renderTableLinkCell(value: string | undefined, kind: "assignee" | "pr") {
@@ -1225,7 +1269,7 @@ function applyCardPreviewPrecedence() {
 }
 
 function taskMetadataWraps(metadata: HTMLElement) {
-  const firstChip = metadata.querySelector<HTMLElement>(".task-chip");
+  const firstChip = metadata.querySelector<HTMLElement>(".task-chip, .dependency-chip");
 
   if (!firstChip) {
     return false;
@@ -1238,19 +1282,72 @@ function taskMetadataWraps(metadata: HTMLElement) {
   return metadataHeight > chipHeight + rowGap + 2;
 }
 
+function renderDependencyChipButtons(ticket: Ticket, placement: "card" | "table") {
+  const lookup = dependencyLookup();
+  const summary = dependencyChipSummary(ticket, lookup);
+  const chips: string[] = [];
+
+  if (summary.blockers.active > 0) {
+    const label = String(summary.blockers.active);
+    const title = `${summary.blockers.active} active ${summary.blockers.active === 1 ? "blocker" : "blockers"}${
+      summary.blockers.missing ? `, ${summary.blockers.missing} missing` : ""
+    }`;
+
+    chips.push(renderDependencyChip(ticket, "blockedBy", "blocked", "ban", label, title, placement));
+  }
+
+  if (summary.subtasks.total > 0) {
+    const label = `${summary.subtasks.completed}/${summary.subtasks.total}`;
+    const title = `${summary.subtasks.completed} of ${summary.subtasks.total} subtasks completed${
+      summary.subtasks.missing ? `, ${summary.subtasks.missing} missing` : ""
+    }`;
+
+    chips.push(renderDependencyChip(ticket, "subtask", "subtasks", "list-tree", label, title, placement));
+  }
+
+  return chips.join("");
+}
+
+function renderDependencyChip(
+  ticket: Ticket,
+  relationship: TicketDependencyRelationship,
+  kind: "blocked" | "subtasks",
+  iconName: string,
+  label: string,
+  title: string,
+  placement: "card" | "table"
+) {
+  return `
+    <button
+      type="button"
+      class="dependency-chip dependency-chip-${kind} dependency-chip-${placement}"
+      data-action="open-dependencies"
+      data-dependency-chip
+      data-ticket-id="${escapeAttr(ticket.id)}"
+      data-relationship="${escapeAttr(relationship)}"
+      title="${escapeAttr(title)}"
+      aria-label="${escapeAttr(`${title}. Open dependencies`)}"
+    >
+      ${icon(iconName)}
+      <span>${escapeHtml(label)}</span>
+    </button>
+  `;
+}
+
 function renderTicketTaskMetadata(ticket: Ticket) {
   const chips = [
     ticket.priority
       ? `<span class="task-chip task-chip-priority task-priority-${ticket.priority.toLowerCase()}" title="Priority ${ticket.priority}">${escapeHtml(ticket.priority)}</span>`
       : "",
-    ticket.size ? `<span class="task-chip task-chip-size" title="Size ${ticket.size}">${escapeHtml(ticket.size)}</span>` : ""
+    ticket.size ? `<span class="task-chip task-chip-size" title="Size ${ticket.size}">${escapeHtml(ticket.size)}</span>` : "",
+    renderDependencyChipButtons(ticket, "card")
   ].filter(Boolean);
 
   if (!chips.length) {
     return "";
   }
 
-  return `<div class="ticket-task-metadata" aria-label="Task priority and size">${chips.join("")}</div>`;
+  return `<div class="ticket-task-metadata" aria-label="Task metadata">${chips.join("")}</div>`;
 }
 
 type TicketMetadataItem = {
@@ -1421,10 +1518,21 @@ function renderEditor() {
           </div>
         </header>
 
-        <div class="editor-body">
-          <div class="markdown-editor-shell">
-            <div class="markdown-editor" data-editor-root></div>
-          </div>
+        <div class="editor-tabs" role="tablist" aria-label="Ticket editor tabs">
+          ${renderEditorTabButton("description", "Description", "pencil")}
+          ${renderEditorTabButton("dependencies", "Dependencies", "git-branch")}
+        </div>
+
+        <div class="editor-body editor-body-${state.editorTab}">
+          ${
+            state.editorTab === "description"
+              ? `
+                <div class="markdown-editor-shell">
+                  <div class="markdown-editor" data-editor-root></div>
+                </div>
+              `
+              : renderDependenciesTab(ticket)
+          }
         </div>
 
         <footer class="editor-footer">
@@ -1436,6 +1544,315 @@ function renderEditor() {
       </section>
     </div>
   `;
+}
+
+function renderEditorTabButton(tab: EditorTab, label: string, iconName: string) {
+  const isSelected = state.editorTab === tab;
+
+  return `
+    <button
+      type="button"
+      class="editor-tab ${isSelected ? "active" : ""}"
+      data-action="set-editor-tab"
+      data-editor-tab="${tab}"
+      role="tab"
+      aria-selected="${isSelected}"
+      tabindex="${isSelected ? "0" : "-1"}"
+    >
+      ${icon(iconName)}
+      <span>${escapeHtml(label)}</span>
+    </button>
+  `;
+}
+
+function renderDependenciesTab(ticket: Ticket) {
+  const lookup = dependencyLookup();
+  const chipSummary = dependencyChipSummary(ticket, lookup);
+  const hasLinks = hasDependencyLinks(ticket);
+
+  return `
+    <div class="dependencies-panel">
+      <div class="dependencies-overview" aria-label="Dependency summary">
+        <div class="dependency-overview-item">
+          <span>${icon("ban")}</span>
+          <strong>${chipSummary.blockers.active}</strong>
+          <small>active blockers</small>
+        </div>
+        <div class="dependency-overview-item">
+          <span>${icon("list-tree")}</span>
+          <strong>${chipSummary.subtasks.completed}/${chipSummary.subtasks.total}</strong>
+          <small>subtasks done</small>
+        </div>
+      </div>
+
+      <div class="dependency-sections">
+        ${dependencySections()
+          .map((section) => renderDependencySection(ticket, section, lookup))
+          .join("")}
+      </div>
+
+      ${hasLinks ? "" : `<p class="dependencies-empty-note">No dependencies linked</p>`}
+    </div>
+  `;
+}
+
+type DependencySection = {
+  relationship: TicketDependencyRelationship;
+  title: string;
+  icon: string;
+  empty: string;
+  ids: (ticket: Ticket) => string[];
+};
+
+function dependencySections(): DependencySection[] {
+  return [
+    {
+      relationship: "parent",
+      title: "Parent",
+      icon: "git-branch",
+      empty: "No parent",
+      ids: (ticket) => ticket.parent
+    },
+    {
+      relationship: "subtask",
+      title: "Subtasks",
+      icon: "list-tree",
+      empty: "No subtasks",
+      ids: (ticket) => ticket.subtasks
+    },
+    {
+      relationship: "blocks",
+      title: "Blocks",
+      icon: "link",
+      empty: "Blocks no tasks",
+      ids: (ticket) => ticket.blocks
+    },
+    {
+      relationship: "blockedBy",
+      title: "Blocked by",
+      icon: "ban",
+      empty: "No blockers",
+      ids: (ticket) => ticket.blockedBy
+    }
+  ];
+}
+
+function renderDependencySection(ticket: Ticket, section: DependencySection, lookup: DependencyLookup) {
+  const references = dependencyReferences(section.ids(ticket), lookup);
+  const summary = dependencySectionSummary(section.relationship, references);
+  const isPickerOpen = state.dependencyPicker?.relationship === section.relationship;
+
+  return `
+    <section class="dependency-section" aria-labelledby="dependency-section-${section.relationship}">
+      <header class="dependency-section-header">
+        <span class="dependency-section-icon">${icon(section.icon)}</span>
+        <div>
+          <h3 id="dependency-section-${section.relationship}">${escapeHtml(section.title)}</h3>
+          <p>${escapeHtml(summary)}</p>
+        </div>
+        <button
+          type="button"
+          class="icon-button dependency-add-button"
+          data-action="open-dependency-picker"
+          data-relationship="${escapeAttr(section.relationship)}"
+          aria-label="Add ${escapeAttr(section.title.toLowerCase())}"
+          title="Add ${escapeAttr(section.title.toLowerCase())}"
+        >
+          ${icon("plus")}
+        </button>
+      </header>
+
+      <div class="dependency-list">
+        ${references.length ? references.map((reference) => renderDependencyReference(ticket, section.relationship, reference)).join("") : `<p class="dependency-empty">${escapeHtml(section.empty)}</p>`}
+      </div>
+
+      ${isPickerOpen ? renderDependencyPicker(ticket, section.relationship) : ""}
+    </section>
+  `;
+}
+
+function dependencySectionSummary(
+  relationship: TicketDependencyRelationship,
+  references: DependencyReference[]
+) {
+  if (!references.length) {
+    return "0 linked";
+  }
+
+  const total = references.length;
+  const done = references.filter((reference) => reference.isDone).length;
+  const missing = references.filter((reference) => reference.isMissing).length;
+
+  if (relationship === "blockedBy") {
+    const active = references.filter((reference) => !reference.isDone).length;
+    return `${active}/${total} active${missing ? `, ${missing} missing` : ""}`;
+  }
+
+  return `${done}/${total} completed${missing ? `, ${missing} missing` : ""}`;
+}
+
+function renderDependencyReference(
+  currentTicket: Ticket,
+  relationship: TicketDependencyRelationship,
+  reference: DependencyReference
+) {
+  if (!reference.ticket) {
+    return `
+      <div class="dependency-reference is-missing">
+        <div class="dependency-reference-main">
+          <span class="dependency-reference-status">${icon("ban")}</span>
+          <div>
+            <strong>Missing reference</strong>
+            <code>${escapeHtml(reference.id)}</code>
+          </div>
+        </div>
+        <button
+          type="button"
+          class="icon-button dependency-remove-button"
+          data-action="remove-dependency"
+          data-relationship="${escapeAttr(relationship)}"
+          data-related-ticket-id="${escapeAttr(reference.id)}"
+          aria-label="Remove missing dependency ${escapeAttr(reference.id)}"
+          title="Remove"
+        >
+          ${icon("unlink")}
+        </button>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="dependency-reference">
+      <button
+        type="button"
+        class="dependency-reference-main dependency-reference-link"
+        data-action="open-linked-ticket"
+        data-ticket-id="${escapeAttr(reference.ticket.id)}"
+        title="${escapeAttr(reference.ticket.title)}"
+      >
+        <span class="dependency-reference-status status-icon-${escapeAttr(reference.ticket.status)}">
+          ${icon(columnForStatus(reference.ticket.status).icon)}
+        </span>
+        <div>
+          <strong>${renderTicketTitle(reference.ticket.title)}</strong>
+          <span>${escapeHtml(dependencyReferenceMeta(reference.ticket, currentTicket))}</span>
+        </div>
+      </button>
+      <button
+        type="button"
+        class="icon-button dependency-remove-button"
+        data-action="remove-dependency"
+        data-relationship="${escapeAttr(relationship)}"
+        data-related-ticket-id="${escapeAttr(reference.ticket.id)}"
+        aria-label="Remove dependency ${escapeAttr(reference.ticket.title)}"
+        title="Remove"
+      >
+        ${icon("unlink")}
+      </button>
+    </div>
+  `;
+}
+
+function dependencyReferenceMeta(ticket: Ticket, currentTicket: Ticket) {
+  const pieces = [columnForStatus(ticket.status).label];
+
+  if (ticket.priority) {
+    pieces.push(ticket.priority);
+  }
+
+  if (ticket.size) {
+    pieces.push(ticket.size);
+  }
+
+  if (ticket.id === currentTicket.id) {
+    pieces.push("Current task");
+  }
+
+  return pieces.join(" / ");
+}
+
+function renderDependencyPicker(ticket: Ticket, relationship: TicketDependencyRelationship) {
+  const picker = state.dependencyPicker;
+  const results = picker?.relationship === relationship ? picker.results : [];
+  const query = picker?.relationship === relationship ? picker.query : "";
+  const isPending = picker?.relationship === relationship && picker.pending;
+
+  return `
+    <div class="dependency-picker">
+      <div class="dependency-search">
+        <span>${icon("search")}</span>
+        <input
+          data-dependency-search-input
+          type="search"
+          value="${escapeAttr(query)}"
+          placeholder="Search existing tasks"
+          aria-label="Search existing tasks"
+          autocomplete="off"
+          maxlength="${maxTicketSearchQueryLength}"
+        />
+        <button
+          type="button"
+          class="dependency-picker-close"
+          data-action="close-dependency-picker"
+          aria-label="Close dependency search"
+          title="Close"
+        >
+          ${icon("x")}
+        </button>
+      </div>
+      <div class="dependency-picker-results" data-dependency-picker-results>
+        ${renderDependencyPickerResults(ticket, relationship, query, isPending, results)}
+      </div>
+    </div>
+  `;
+}
+
+function renderDependencyPickerResults(
+  ticket: Ticket,
+  relationship: TicketDependencyRelationship,
+  query: string,
+  pending: boolean,
+  results: TicketSearchResult[]
+) {
+  if (!query.trim()) {
+    return `<p class="dependency-picker-empty">Search to link a task</p>`;
+  }
+
+  if (pending) {
+    return `<p class="dependency-picker-empty">Searching</p>`;
+  }
+
+  const candidates = results.map((result) => result.ticket).filter((candidate) => candidate.id !== ticket.id);
+
+  if (!candidates.length) {
+    return `<p class="dependency-picker-empty">No matches</p>`;
+  }
+
+  return candidates
+    .slice(0, 8)
+    .map((candidate) => {
+      const alreadyLinked = isDependencyAlreadyLinked(ticket, relationship, candidate.id);
+
+      return `
+        <button
+          type="button"
+          class="dependency-result"
+          data-action="add-dependency"
+          data-related-ticket-id="${escapeAttr(candidate.id)}"
+          ${alreadyLinked ? "disabled" : ""}
+          title="${escapeAttr(candidate.title)}"
+        >
+          <span class="dependency-reference-status status-icon-${escapeAttr(candidate.status)}">
+            ${icon(columnForStatus(candidate.status).icon)}
+          </span>
+          <span>
+            <strong>${renderTicketTitle(candidate.title)}</strong>
+            <small>${escapeHtml(alreadyLinked ? "Already linked" : columnForStatus(candidate.status).label)}</small>
+          </span>
+        </button>
+      `;
+    })
+    .join("");
 }
 
 function renderTicketTimestamps(ticket: Ticket) {
@@ -2390,9 +2807,21 @@ function bindTicketEvents() {
 
   bindTableTicketEvents();
 
+  document.querySelectorAll<HTMLButtonElement>('[data-action="open-dependencies"]').forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const ticketId = button.dataset.ticketId;
+
+      if (ticketId) {
+        openEditor(ticketId, { tab: "dependencies" });
+      }
+    });
+  });
+
   document.querySelectorAll<HTMLElement>(".ticket-card").forEach((card) => {
     card.addEventListener("click", (event) => {
-      if ((event.target as HTMLElement).closest("a.ticket-metadata-item")) {
+      if ((event.target as HTMLElement).closest("a.ticket-metadata-item, [data-dependency-chip]")) {
         return;
       }
 
@@ -2404,7 +2833,7 @@ function bindTicketEvents() {
     });
 
     card.addEventListener("contextmenu", (event) => {
-      if ((event.target as HTMLElement).closest("a.ticket-metadata-item")) {
+      if ((event.target as HTMLElement).closest("a.ticket-metadata-item, [data-dependency-chip]")) {
         return;
       }
 
@@ -2574,6 +3003,16 @@ function bindTableTicketEvents() {
       return;
     }
 
+    if (action === "open-dependencies") {
+      const ticketId =
+        actionButton.dataset.ticketId ?? actionButton.closest<HTMLElement>(".task-table-row")?.dataset.ticketId;
+
+      if (ticketId) {
+        openEditor(ticketId, { tab: "dependencies" });
+      }
+      return;
+    }
+
     if (action === "toggle-task-selector") {
       toggleTaskSelector(actionButton.closest<HTMLElement>("[data-task-selector]"));
       return;
@@ -2677,6 +3116,57 @@ function bindEditorEvents() {
       return;
     }
 
+    if (action === "set-editor-tab") {
+      const tab = actionButton.dataset.editorTab;
+
+      if (isEditorTab(tab)) {
+        setEditorTab(tab);
+      }
+      return;
+    }
+
+    if (action === "open-dependency-picker") {
+      const relationship = actionButton.dataset.relationship;
+
+      if (isTicketDependencyRelationship(relationship)) {
+        openDependencyPicker(relationship);
+      }
+      return;
+    }
+
+    if (action === "close-dependency-picker") {
+      closeDependencyPicker();
+      return;
+    }
+
+    if (action === "add-dependency") {
+      const relatedTicketId = actionButton.dataset.relatedTicketId;
+
+      if (relatedTicketId) {
+        void addDependency(relatedTicketId);
+      }
+      return;
+    }
+
+    if (action === "remove-dependency") {
+      const relationship = actionButton.dataset.relationship;
+      const relatedTicketId = actionButton.dataset.relatedTicketId;
+
+      if (isTicketDependencyRelationship(relationship) && relatedTicketId) {
+        void updateTicketDependency(relationship, relatedTicketId, false);
+      }
+      return;
+    }
+
+    if (action === "open-linked-ticket") {
+      const ticketId = actionButton.dataset.ticketId;
+
+      if (ticketId) {
+        void openEditorAfterSave(ticketId, { tab: "dependencies" });
+      }
+      return;
+    }
+
     if (action === "close-editor") {
       void requestCloseEditor();
     }
@@ -2729,6 +3219,19 @@ function bindEditorEvents() {
         closeTaskSelector(selector);
       }
     });
+  });
+
+  const dependencySearchInput = document.querySelector<HTMLInputElement>("[data-dependency-search-input]");
+
+  dependencySearchInput?.addEventListener("input", () => {
+    setDependencySearchQuery(dependencySearchInput.value.slice(0, maxTicketSearchQueryLength));
+  });
+
+  dependencySearchInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeDependencyPicker();
+    }
   });
 }
 
@@ -2913,7 +3416,7 @@ function bindLayoutGuards() {
   });
 }
 
-function openEditor(ticketId: string) {
+function openEditor(ticketId: string, options: { tab?: EditorTab } = {}) {
   const ticket = state.tickets.find((candidate) => candidate.id === ticketId);
 
   if (!ticket) {
@@ -2921,6 +3424,9 @@ function openEditor(ticketId: string) {
   }
 
   state.selectedTicketId = ticketId;
+  state.editorTab = options.tab ?? "description";
+  state.dependencyPicker = null;
+  cancelDependencySearchDebounce();
   state.draft = {
     id: ticket.id,
     title: ticket.title,
@@ -2938,9 +3444,232 @@ function openEditor(ticketId: string) {
 function closeEditor() {
   clearScheduledDraftSave();
   state.selectedTicketId = null;
+  state.editorTab = "description";
   state.draft = null;
+  state.dependencyPicker = null;
+  cancelDependencySearchDebounce();
   state.draftSaveError = null;
   render({ preserveScroll: true });
+}
+
+async function openEditorAfterSave(ticketId: string, options: { tab?: EditorTab } = {}) {
+  if (state.draft && state.selectedTicketId !== ticketId && !(await confirmDiscardDraft())) {
+    return;
+  }
+
+  openEditor(ticketId, options);
+}
+
+function setEditorTab(tab: EditorTab) {
+  if (state.editorTab === tab) {
+    return;
+  }
+
+  state.editorTab = tab;
+
+  if (tab !== "dependencies") {
+    state.dependencyPicker = null;
+    cancelDependencySearchDebounce();
+  }
+
+  render({ preserveScroll: true });
+}
+
+function openDependencyPicker(relationship: TicketDependencyRelationship) {
+  state.dependencyPicker = {
+    relationship,
+    query: "",
+    pending: false,
+    results: [],
+    requestSeq: 0
+  };
+  render({ preserveScroll: true });
+  document.querySelector<HTMLInputElement>("[data-dependency-search-input]")?.focus({ preventScroll: true });
+}
+
+function closeDependencyPicker() {
+  if (!state.dependencyPicker) {
+    return;
+  }
+
+  state.dependencyPicker = null;
+  cancelDependencySearchDebounce();
+  render({ preserveScroll: true });
+}
+
+function setDependencySearchQuery(query: string) {
+  const picker = state.dependencyPicker;
+
+  if (!picker) {
+    return;
+  }
+
+  const nextQuery = query.slice(0, maxTicketSearchQueryLength);
+
+  if (picker.query === nextQuery) {
+    return;
+  }
+
+  picker.query = nextQuery;
+
+  if (!nextQuery.trim()) {
+    cancelDependencySearchDebounce();
+    picker.requestSeq += 1;
+    picker.pending = false;
+    picker.results = [];
+    updateDependencyPickerResults();
+    return;
+  }
+
+  picker.pending = true;
+  updateDependencyPickerResults();
+  scheduleDependencySearch();
+}
+
+function scheduleDependencySearch() {
+  cancelDependencySearchDebounce();
+  dependencySearchDebounceTimer = window.setTimeout(() => {
+    dependencySearchDebounceTimer = null;
+    void runDependencySearch();
+  }, dependencySearchDebounceMs);
+}
+
+function cancelDependencySearchDebounce() {
+  if (!dependencySearchDebounceTimer) {
+    return;
+  }
+
+  window.clearTimeout(dependencySearchDebounceTimer);
+  dependencySearchDebounceTimer = null;
+}
+
+async function runDependencySearch() {
+  const picker = state.dependencyPicker;
+  const projectId = state.selectedProjectId;
+
+  if (!picker || !projectId || !picker.query.trim()) {
+    return;
+  }
+
+  const relationship = picker.relationship;
+  const query = picker.query;
+  const requestSeq = picker.requestSeq + 1;
+  picker.requestSeq = requestSeq;
+  picker.pending = true;
+  updateDependencyPickerResults();
+
+  try {
+    const results = await api.searchTickets(projectId, query);
+
+    if (!isCurrentDependencySearch(requestSeq, projectId, relationship, query)) {
+      return;
+    }
+
+    state.dependencyPicker!.results = results;
+    state.dependencyPicker!.pending = false;
+    updateDependencyPickerResults();
+  } catch (error) {
+    if (!isCurrentDependencySearch(requestSeq, projectId, relationship, query)) {
+      return;
+    }
+
+    state.dependencyPicker!.results = [];
+    state.dependencyPicker!.pending = false;
+    showError(error, { preserveScroll: true });
+  }
+}
+
+function isCurrentDependencySearch(
+  requestSeq: number,
+  projectId: string,
+  relationship: TicketDependencyRelationship,
+  query: string
+) {
+  const picker = state.dependencyPicker;
+
+  return (
+    picker !== null &&
+    picker.requestSeq === requestSeq &&
+    picker.relationship === relationship &&
+    picker.query === query &&
+    state.selectedProjectId === projectId
+  );
+}
+
+function updateDependencyPickerResults() {
+  const ticket = getSelectedTicket();
+  const picker = state.dependencyPicker;
+  const container = document.querySelector<HTMLElement>("[data-dependency-picker-results]");
+  const input = document.querySelector<HTMLInputElement>("[data-dependency-search-input]");
+
+  if (!ticket || !picker || !container) {
+    return;
+  }
+
+  if (input && input.value !== picker.query) {
+    input.value = picker.query;
+  }
+
+  container.innerHTML = renderDependencyPickerResults(
+    ticket,
+    picker.relationship,
+    picker.query,
+    picker.pending,
+    picker.results
+  );
+  hydrateIcons();
+}
+
+async function addDependency(relatedTicketId: string) {
+  const relationship = state.dependencyPicker?.relationship;
+
+  if (!relationship) {
+    return;
+  }
+
+  await updateTicketDependency(relationship, relatedTicketId, true);
+}
+
+async function updateTicketDependency(
+  relationship: TicketDependencyRelationship,
+  relatedTicketId: string,
+  linked: boolean
+) {
+  const projectId = state.selectedProjectId;
+  const ticketId = state.selectedTicketId;
+
+  if (!projectId || !ticketId) {
+    return;
+  }
+
+  if (ticketId === relatedTicketId) {
+    showError(new Error("A ticket cannot depend on itself."), { preserveScroll: true });
+    return;
+  }
+
+  try {
+    if (state.draft && !(await saveDraft({ flush: true }))) {
+      return;
+    }
+
+    const tickets = await trackLocalMutation(
+      api.setTicketDependency(projectId, ticketId, relatedTicketId, relationship, linked)
+    );
+    state.tickets = tickets.sort(sortTickets);
+
+    if (linked) {
+      state.dependencyPicker = null;
+      cancelDependencySearchDebounce();
+    }
+
+    if (await rerunActiveTicketSearch({ preserveScroll: true })) {
+      return;
+    }
+
+    render({ preserveScroll: true });
+  } catch (error) {
+    showError(error, { preserveScroll: true });
+  }
 }
 
 async function requestCloseEditor() {
@@ -3724,6 +4453,10 @@ function getSelectedTicket() {
   return state.selectedTicketId ? getTicket(state.selectedTicketId) : null;
 }
 
+function dependencyLookup() {
+  return renderDependencyLookup ?? createDependencyLookup(state.tickets);
+}
+
 function getTicket(ticketId: string) {
   return state.tickets.find((ticket) => ticket.id === ticketId) ?? null;
 }
@@ -4211,6 +4944,38 @@ function columnForStatus(status: Status) {
 
 function isStatus(value: string | undefined): value is Status {
   return columns.some((column) => column.id === value);
+}
+
+function isEditorTab(value: string | undefined): value is EditorTab {
+  return value === "description" || value === "dependencies";
+}
+
+function isTicketDependencyRelationship(value: string | undefined): value is TicketDependencyRelationship {
+  return value === "parent" || value === "subtask" || value === "blocks" || value === "blockedBy";
+}
+
+function isDependencyAlreadyLinked(
+  ticket: Ticket,
+  relationship: TicketDependencyRelationship,
+  relatedTicketId: string
+) {
+  return dependencyIdsForRelationship(ticket, relationship).includes(relatedTicketId);
+}
+
+function dependencyIdsForRelationship(ticket: Ticket, relationship: TicketDependencyRelationship) {
+  if (relationship === "parent") {
+    return uniqueDependencyIds(ticket.parent);
+  }
+
+  if (relationship === "subtask") {
+    return uniqueDependencyIds(ticket.subtasks);
+  }
+
+  if (relationship === "blocks") {
+    return uniqueDependencyIds(ticket.blocks);
+  }
+
+  return uniqueDependencyIds(ticket.blockedBy);
 }
 
 function isTaskSelectorKind(value: string | undefined): value is TaskSelectorKind {
@@ -5171,6 +5936,7 @@ function hydrateIcons() {
       Archive,
       ArrowDown,
       ArrowUp,
+      Ban,
       Check,
       ChevronDown,
       CircleCheck,
@@ -5180,7 +5946,10 @@ function hydrateIcons() {
       FolderOpen,
       FolderPlus,
       GripVertical,
+      GitBranch,
+      Link,
       ListTodo,
+      ListTree,
       LoaderCircle,
       Moon,
       Palette,
@@ -5194,6 +5963,7 @@ function hydrateIcons() {
       Table2,
       Trash2,
       Type,
+      Unlink,
       X
     }
   });
