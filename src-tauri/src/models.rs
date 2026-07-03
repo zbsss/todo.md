@@ -62,6 +62,29 @@ pub(crate) struct Ticket {
     pub(crate) assignee: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TicketSearchResult {
+    pub(crate) ticket: Ticket,
+    pub(crate) score: i64,
+    pub(crate) matches: Vec<TicketSearchMatch>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TicketSearchMatch {
+    pub(crate) field: String,
+    pub(crate) segments: Vec<TicketSearchSegment>,
+    pub(crate) snippet_segments: Vec<TicketSearchSegment>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TicketSearchSegment {
+    pub(crate) text: String,
+    pub(crate) matched: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TicketUpdate {

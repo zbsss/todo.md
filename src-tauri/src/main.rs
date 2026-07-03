@@ -6,6 +6,7 @@ mod models;
 mod paths;
 mod projects;
 mod registry;
+mod search;
 #[cfg(test)]
 mod tests;
 mod text;
@@ -24,6 +25,7 @@ fn main() {
             commands::open_project_folder,
             commands::open_external_link,
             commands::list_tickets,
+            commands::search_tickets,
             commands::create_ticket,
             commands::update_ticket,
             commands::save_ticket_image,

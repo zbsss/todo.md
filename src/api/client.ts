@@ -7,6 +7,7 @@ import type {
   TaskSize,
   Ticket,
   TicketDraft,
+  TicketSearchResult,
   WorkspaceInfo
 } from "../app/types";
 import { createMockStore, type BrowserMockStore } from "./mockStore";
@@ -28,6 +29,7 @@ export type TodoApi = {
   openProject(projectId: string): Promise<void>;
   openExternalLink(url: string): Promise<void>;
   listTickets(projectId: string): Promise<Ticket[]>;
+  searchTickets(projectId: string, query: string): Promise<TicketSearchResult[]>;
   createTicket(projectId: string, status: Status, title: string): Promise<Ticket>;
   updateTicket(
     projectId: string,
@@ -115,6 +117,13 @@ export function createApi({ isTauriRuntime, mockStore = createMockStore() }: Cre
       }
 
       return mockStore.listTickets(projectId);
+    },
+    async searchTickets(projectId: string, query: string) {
+      if (isTauriRuntime) {
+        return invoke<TicketSearchResult[]>("search_tickets", { projectId, query });
+      }
+
+      return mockStore.searchTickets(projectId, query);
     },
     async createTicket(projectId: string, status: Status, title: string) {
       if (isTauriRuntime) {

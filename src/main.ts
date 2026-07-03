@@ -40,11 +40,21 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Search,
   Table2,
   Trash2,
   X
 } from "lucide";
 import { createApi } from "./api/client";
+import {
+  createTicketSearchResultMap,
+  filterTicketsBySearchResults,
+  isTicketSearchActive,
+  maxTicketSearchQueryLength,
+  renderTicketSearchSegments,
+  shouldDisableSearchReorder,
+  shouldRerunTicketSearchAfterMutation
+} from "./api/mockStore";
 import { detectAppRuntime } from "./api/runtime";
 import {
   createBackdropDismissState,
@@ -62,6 +72,10 @@ import type {
   TaskSize,
   Ticket,
   TicketDraft,
+  TicketSearchField,
+  TicketSearchMatch,
+  TicketSearchResult,
+  TicketSearchSegment,
   WorkspaceInfo
 } from "./app/types";
 import {
@@ -122,6 +136,11 @@ type ProjectTableState = {
   sort: TableSort | null;
 };
 
+type SearchFocusSnapshot = {
+  start: number | null;
+  end: number | null;
+} | null;
+
 const state: {
   workspace: WorkspaceInfo | null;
   selectedProjectId: string | null;
@@ -139,6 +158,11 @@ const state: {
   draftSaveError: string | null;
   projectViewModes: Record<string, ProjectViewMode>;
   projectTableStates: Record<string, ProjectTableState>;
+  searchQuery: string;
+  searchPending: boolean;
+  searchResults: TicketSearchResult[];
+  searchResultMap: Map<string, TicketSearchResult>;
+  searchRequestSeq: number;
 } = {
   workspace: null,
   selectedProjectId: null,
@@ -155,7 +179,12 @@ const state: {
   error: null,
   draftSaveError: null,
   projectViewModes: readProjectViewModes(),
-  projectTableStates: {}
+  projectTableStates: {},
+  searchQuery: "",
+  searchPending: false,
+  searchResults: [],
+  searchResultMap: new Map(),
+  searchRequestSeq: 0
 };
 
 const runtime = detectAppRuntime();
@@ -179,6 +208,7 @@ let draftSaveRunId = 0;
 let isClosingWindow = false;
 const ticketAutoScrollEdge = 72;
 const ticketAutoScrollMaxSpeed = 360;
+const ticketSearchDebounceMs = 150;
 const ticketAutoScroll: {
   frameId: number | null;
   lastTimestamp: number;
@@ -194,6 +224,7 @@ const ticketAutoScroll: {
 };
 let ticketDropCleanupFrameId: number | null = null;
 let automaticRefreshTimer: ReturnType<typeof window.setInterval> | null = null;
+let ticketSearchDebounceTimer: ReturnType<typeof window.setTimeout> | null = null;
 let isAutomaticRefreshRunning = false;
 let pendingLocalMutationCount = 0;
 
@@ -223,6 +254,7 @@ async function loadWorkspace() {
       await loadTickets(state.selectedProjectId);
     } else {
       state.tickets = [];
+      clearTicketSearchResults();
       render();
     }
   } catch (error) {
@@ -237,6 +269,7 @@ async function loadTickets(projectId: string) {
   state.error = null;
   state.tickets = await api.listTickets(projectId);
   state.tickets.sort(sortTickets);
+  await rerunActiveTicketSearch({ preserveScroll: true });
 }
 
 function startAutomaticRefresh() {
@@ -293,6 +326,11 @@ async function refreshWorkspaceInBackground() {
     state.selectedTicketId = nextSelectedTicketId;
     state.tickets = nextTickets;
     state.error = null;
+
+    if (await rerunActiveTicketSearch({ preserveScroll: true })) {
+      return;
+    }
+
     render({ preserveScroll: true });
   } catch (error) {
     console.warn("Automatic refresh failed.", error);
@@ -329,6 +367,7 @@ async function trackLocalMutation<T>(mutation: Promise<T>) {
 
 function render(options: RenderOptions = {}) {
   const scrollSnapshot = options.preserveScroll ? captureScrollSnapshot() : null;
+  const searchFocusSnapshot = captureSearchFocusSnapshot();
 
   destroyMarkdownEditor();
 
@@ -374,6 +413,7 @@ function render(options: RenderOptions = {}) {
           </div>
           <div class="topbar-actions">
             ${renderViewSwitcher()}
+            ${renderTicketSearchControl()}
             <button class="ghost-button" data-action="refresh" title="Refresh board">
               ${icon("refresh-cw")}
               <span>Refresh</span>
@@ -395,6 +435,7 @@ function render(options: RenderOptions = {}) {
   hydrateIcons();
   bindEvents();
   applyCardPreviewPrecedence();
+  restoreSearchFocusSnapshot(searchFocusSnapshot);
   restoreScrollSnapshot(scrollSnapshot);
 
   if (options.revealTicket) {
@@ -456,6 +497,38 @@ function renderViewSwitcher() {
         ${icon("table-2")}
         <span>Table</span>
       </button>
+    </div>
+  `;
+}
+
+function renderTicketSearchControl() {
+  const isActive = hasActiveTicketSearch();
+  const countText = ticketSearchCountText();
+
+  return `
+    <div class="ticket-search ${isActive ? "is-active" : ""} ${state.searchPending ? "is-pending" : ""}" role="search">
+      <span class="ticket-search-icon">${icon("search")}</span>
+      <input
+        data-search-input
+        type="search"
+        value="${escapeAttr(state.searchQuery)}"
+        placeholder="Search tickets"
+        aria-label="Search tickets"
+        autocomplete="off"
+        maxlength="${maxTicketSearchQueryLength}"
+        ${state.selectedProjectId ? "" : "disabled"}
+      />
+      <button
+        type="button"
+        class="ticket-search-clear"
+        data-action="clear-search"
+        aria-label="Clear search"
+        title="Clear search"
+        ${state.searchQuery ? "" : "hidden"}
+      >
+        ${icon("x")}
+      </button>
+      <span class="ticket-search-count" data-search-count aria-live="polite">${escapeHtml(countText)}</span>
     </div>
   `;
 }
@@ -610,9 +683,14 @@ function renderBoard() {
 }
 
 function renderKanbanBoard() {
+  const hasNoMatches = hasNoTicketSearchMatches();
+
   return `
-    <div class="board" aria-label="Task board">
-      ${columns.map(renderColumn).join("")}
+    <div class="board-shell ${hasNoMatches ? "has-search-empty" : ""}">
+      ${hasNoMatches ? renderNoSearchMatches() : ""}
+      <div class="board" aria-label="Task board">
+        ${columns.map(renderColumn).join("")}
+      </div>
     </div>
   `;
 }
@@ -789,14 +867,17 @@ function renderTableRow(ticket: Ticket) {
       aria-keyshortcuts="Enter"
     >
       <td class="task-table-cell task-table-title-cell">
-        <button
-          type="button"
-          class="table-title-button"
-          data-action="open-table-ticket"
-          title="${escapeAttr(displayTitle)}"
-        >
-          ${renderTicketTitle(ticket.title)}
-        </button>
+        <div class="table-title-stack">
+          <button
+            type="button"
+            class="table-title-button"
+            data-action="open-table-ticket"
+            title="${escapeAttr(displayTitle)}"
+          >
+            ${renderSearchAwareTicketTitle(ticket)}
+          </button>
+          ${renderTicketSearchSnippet(ticket, "table")}
+        </div>
       </td>
       <td class="task-table-cell task-table-status-cell">
         ${renderTaskSelector("status", ticket.status, {
@@ -864,14 +945,24 @@ function renderTableLinkLabel(kind: "assignee" | "pr", label: string) {
 }
 
 function renderEmptyTableRow() {
+  const label = hasNoTicketSearchMatches() ? "No matches" : "No tasks";
+
   return `
     <tr class="task-table-empty-row">
       <td colspan="${tableColumnConfigs().length}">
         <div class="empty-board">
-          <h3>No tasks</h3>
+          <h3>${label}</h3>
         </div>
       </td>
     </tr>
+  `;
+}
+
+function renderNoSearchMatches() {
+  return `
+    <div class="empty-board search-empty-state">
+      <h3>No matches</h3>
+    </div>
   `;
 }
 
@@ -885,17 +976,18 @@ function renderTicketCard(ticket: Ticket) {
 
   return `
     <article
-      class="ticket-card"
-      draggable="true"
+      class="ticket-card ${isTicketReorderDisabled() ? "is-reorder-disabled" : ""}"
+      draggable="${isTicketReorderDisabled() ? "false" : "true"}"
       data-ticket-id="${escapeAttr(ticket.id)}"
       tabindex="0"
       aria-label="${escapeAttr(ticketCardAriaLabel(ticket))}"
-      aria-keyshortcuts="Enter ArrowUp ArrowDown"
+      aria-keyshortcuts="${isTicketReorderDisabled() ? "Enter" : "Enter ArrowUp ArrowDown"}"
     >
       <div class="ticket-topline">
-        <h4>${renderTicketTitle(ticket.title)}</h4>
-        <span class="drag-handle" title="Drag to reorder">${icon("grip-vertical")}</span>
+        <h4>${renderSearchAwareTicketTitle(ticket)}</h4>
+        <span class="drag-handle" title="${isTicketReorderDisabled() ? "Reordering disabled while search is active" : "Drag to reorder"}">${icon("grip-vertical")}</span>
       </div>
+      ${renderTicketSearchSnippet(ticket, "card")}
       ${renderTicketTaskMetadata(ticket)}
       ${renderTicketMetadata(ticket)}
       ${renderedBody ? `<div class="markdown card-markdown">${renderedBody}</div>` : ""}
@@ -1317,6 +1409,7 @@ function taskSelectorMarkClass(kind: TaskSelectorKind, value: string) {
 function bindEvents() {
   bindProjectEvents();
   bindViewEvents();
+  bindTicketSearchEvents();
   bindTicketEvents();
   bindMetadataEvents();
   bindEditorEvents();
@@ -1345,6 +1438,25 @@ function bindViewEvents() {
 
   document.querySelector<HTMLButtonElement>('[data-action="archive-done"]')?.addEventListener("click", () => {
     void archiveDoneTickets();
+  });
+}
+
+function bindTicketSearchEvents() {
+  const input = document.querySelector<HTMLInputElement>("[data-search-input]");
+
+  input?.addEventListener("input", () => {
+    const nextQuery = input.value.slice(0, maxTicketSearchQueryLength);
+
+    if (input.value !== nextQuery) {
+      input.value = nextQuery;
+    }
+
+    setTicketSearchQuery(nextQuery);
+  });
+
+  document.querySelector<HTMLButtonElement>('[data-action="clear-search"]')?.addEventListener("click", () => {
+    setTicketSearchQuery("");
+    document.querySelector<HTMLInputElement>("[data-search-input]")?.focus({ preventScroll: true });
   });
 }
 
@@ -1910,6 +2022,9 @@ function bindTicketEvents() {
           state.tickets.push(ticket);
           state.workspace = updateTicketCount(state.workspace, state.selectedProjectId, 1);
           input.value = "";
+          if (await rerunActiveTicketSearch({ preserveScroll: true, revealTicket: { id: ticket.id, block: "end" } })) {
+            return;
+          }
           render({ preserveScroll: true, revealTicket: { id: ticket.id, block: "end" } });
         } catch (error) {
           showError(error);
@@ -1986,6 +2101,11 @@ function bindTicketEvents() {
       }
 
       if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        if (isTicketReorderDisabled()) {
+          event.preventDefault();
+          return;
+        }
+
         const ticketId = card.dataset.ticketId;
 
         if (ticketId) {
@@ -1996,6 +2116,11 @@ function bindTicketEvents() {
     });
 
     card.addEventListener("dragstart", (event) => {
+      if (isTicketReorderDisabled()) {
+        event.preventDefault();
+        return;
+      }
+
       const ticketId = card.dataset.ticketId;
 
       if (!ticketId || !event.dataTransfer) {
@@ -2022,7 +2147,7 @@ function bindTicketEvents() {
 
   document.querySelectorAll<HTMLElement>(".column").forEach((column) => {
     column.addEventListener("dragover", (event) => {
-      if (!state.draggingId) {
+      if (isTicketReorderDisabled() || !state.draggingId) {
         return;
       }
 
@@ -2061,6 +2186,11 @@ function bindTicketEvents() {
     });
 
     column.addEventListener("drop", async (event) => {
+      if (isTicketReorderDisabled()) {
+        event.preventDefault();
+        return;
+      }
+
       event.preventDefault();
       cancelTicketDropCleanup();
       stopTicketAutoScroll();
@@ -2618,6 +2748,7 @@ async function persistCurrentDraft() {
 
   clearDraftSaveError();
   state.tickets = state.tickets.map((ticket) => (ticket.id === updated.id ? updated : ticket)).sort(sortTickets);
+  await rerunActiveTicketSearch({ preserveScroll: true });
 
   if (state.draft?.id === ticketId) {
     const savedImages = new Set(imagePaths);
@@ -2701,6 +2832,7 @@ function persistMockDraftSync() {
     clearDraftSaveError();
     state.tickets = state.tickets.map((ticket) => (ticket.id === updated?.id ? updated : ticket)).sort(sortTickets);
     state.draft.pastedImages = [];
+    void rerunActiveTicketSearch({ preserveScroll: true });
     return true;
   } catch {
     return false;
@@ -2739,10 +2871,19 @@ async function deleteTicket(ticketId: string) {
     state.tickets = state.tickets.filter((candidate) => candidate.id !== ticket.id);
     state.workspace = updateTicketCount(state.workspace, state.selectedProjectId, -1);
     state.ticketMenu = null;
+    removeTicketFromSearchResults(ticket.id);
 
     if (state.selectedTicketId === ticket.id) {
       state.selectedTicketId = null;
       state.draft = null;
+    }
+
+    if (hasActiveTicketSearch()) {
+      render({ preserveScroll: true });
+    }
+
+    if (await rerunActiveTicketSearch({ preserveScroll: true })) {
+      return;
     }
 
     render();
@@ -2756,7 +2897,7 @@ async function archiveDoneTickets() {
     return;
   }
 
-  const doneTickets = ticketsFor("done");
+  const doneTickets = state.tickets.filter((ticket) => ticket.status === "done");
 
   if (doneTickets.length === 0) {
     return;
@@ -2783,6 +2924,10 @@ async function archiveDoneTickets() {
     if (state.selectedTicketId && !state.tickets.some((ticket) => ticket.id === state.selectedTicketId)) {
       state.selectedTicketId = null;
       state.draft = null;
+    }
+
+    if (await rerunActiveTicketSearch({ preserveScroll: true })) {
+      return;
     }
 
     render({ preserveScroll: true });
@@ -2820,7 +2965,7 @@ function unusedDraftImages(draft: TicketDraft) {
 }
 
 async function moveTicket(ticketId: string, status: Status, beforeId?: string) {
-  if (!state.selectedProjectId) {
+  if (!state.selectedProjectId || isTicketReorderDisabled()) {
     return;
   }
 
@@ -2858,6 +3003,10 @@ async function moveTicket(ticketId: string, status: Status, beforeId?: string) {
 type KeyboardMoveDirection = "up" | "down";
 
 async function moveFocusedTicket(ticketId: string, direction: KeyboardMoveDirection) {
+  if (isTicketReorderDisabled()) {
+    return;
+  }
+
   const ticket = state.tickets.find((candidate) => candidate.id === ticketId);
 
   if (!ticket) {
@@ -3323,7 +3472,7 @@ function currentProjectTableState(): ProjectTableState {
 function tableTickets() {
   const tableState = currentProjectTableState();
 
-  return sortTicketsForTable(state.tickets, tableState.sort);
+  return sortTicketsForTable(searchFilteredTickets(), tableState.sort);
 }
 
 function defaultTableSortIndex(column: TableColumn) {
@@ -3353,7 +3502,295 @@ function toggleTableSort(column: TableColumn) {
 }
 
 function ticketsFor(status: Status) {
-  return state.tickets.filter((ticket) => ticket.status === status).sort(sortTickets);
+  return searchFilteredTickets().filter((ticket) => ticket.status === status).sort(sortTickets);
+}
+
+function searchFilteredTickets() {
+  return filterTicketsBySearchResults(state.tickets, state.searchResults, hasActiveTicketSearch());
+}
+
+function hasActiveTicketSearch() {
+  return isTicketSearchActive(state.searchQuery);
+}
+
+function hasNoTicketSearchMatches() {
+  return hasActiveTicketSearch() && !state.searchPending && state.searchResults.length === 0;
+}
+
+function isTicketReorderDisabled() {
+  return shouldDisableSearchReorder(state.searchQuery);
+}
+
+function ticketSearchCountText() {
+  if (!hasActiveTicketSearch()) {
+    return "";
+  }
+
+  if (state.searchPending) {
+    return "Searching";
+  }
+
+  const count = state.searchResults.length;
+  return `${count} ${count === 1 ? "match" : "matches"}`;
+}
+
+function setTicketSearchQuery(query: string) {
+  const nextQuery = query.slice(0, maxTicketSearchQueryLength);
+
+  if (state.searchQuery === nextQuery) {
+    return;
+  }
+
+  state.searchQuery = nextQuery;
+
+  if (!hasActiveTicketSearch()) {
+    cancelTicketSearchDebounce();
+    state.searchRequestSeq += 1;
+    state.searchPending = false;
+    clearTicketSearchResults();
+    render({ preserveScroll: true });
+    return;
+  }
+
+  state.searchPending = true;
+  updateTicketSearchControl();
+  scheduleTicketSearch();
+}
+
+function scheduleTicketSearch() {
+  cancelTicketSearchDebounce();
+  ticketSearchDebounceTimer = window.setTimeout(() => {
+    ticketSearchDebounceTimer = null;
+    void runTicketSearch(state.searchQuery, { preserveScroll: true });
+  }, ticketSearchDebounceMs);
+}
+
+function cancelTicketSearchDebounce() {
+  if (!ticketSearchDebounceTimer) {
+    return;
+  }
+
+  window.clearTimeout(ticketSearchDebounceTimer);
+  ticketSearchDebounceTimer = null;
+}
+
+async function rerunActiveTicketSearch(renderOptions: RenderOptions = {}) {
+  if (!shouldRerunTicketSearchAfterMutation(state.searchQuery)) {
+    return false;
+  }
+
+  cancelTicketSearchDebounce();
+  return runTicketSearch(state.searchQuery, renderOptions);
+}
+
+async function runTicketSearch(query: string, renderOptions: RenderOptions = {}) {
+  const projectId = state.selectedProjectId;
+
+  if (!projectId || !isTicketSearchActive(query)) {
+    clearTicketSearchResults();
+    state.searchPending = false;
+    updateTicketSearchControl();
+    return false;
+  }
+
+  const requestSeq = ++state.searchRequestSeq;
+  state.searchPending = true;
+  updateTicketSearchControl();
+
+  try {
+    const results = await api.searchTickets(projectId, query);
+
+    if (!isCurrentTicketSearchRequest(requestSeq, projectId, query)) {
+      return false;
+    }
+
+    applyTicketSearchResults(results);
+    state.searchPending = false;
+    render(renderOptions);
+    return true;
+  } catch (error) {
+    if (!isCurrentTicketSearchRequest(requestSeq, projectId, query)) {
+      return false;
+    }
+
+    state.searchPending = false;
+    clearTicketSearchResults();
+    showError(error, renderOptions);
+    return false;
+  }
+}
+
+function isCurrentTicketSearchRequest(requestSeq: number, projectId: string, query: string) {
+  return (
+    requestSeq === state.searchRequestSeq &&
+    state.selectedProjectId === projectId &&
+    state.searchQuery === query &&
+    hasActiveTicketSearch()
+  );
+}
+
+function applyTicketSearchResults(results: TicketSearchResult[]) {
+  state.searchResults = results;
+  state.searchResultMap = createTicketSearchResultMap(results);
+}
+
+function clearTicketSearchResults() {
+  applyTicketSearchResults([]);
+}
+
+function removeTicketFromSearchResults(ticketId: string) {
+  if (!hasActiveTicketSearch()) {
+    return;
+  }
+
+  applyTicketSearchResults(state.searchResults.filter((result) => result.ticket.id !== ticketId));
+}
+
+function updateTicketSearchControl() {
+  const container = document.querySelector<HTMLElement>(".ticket-search");
+  const input = document.querySelector<HTMLInputElement>("[data-search-input]");
+  const clearButton = document.querySelector<HTMLButtonElement>('[data-action="clear-search"]');
+  const count = document.querySelector<HTMLElement>("[data-search-count]");
+
+  container?.classList.toggle("is-active", hasActiveTicketSearch());
+  container?.classList.toggle("is-pending", state.searchPending);
+
+  if (input && input.value !== state.searchQuery) {
+    input.value = state.searchQuery;
+  }
+
+  if (clearButton) {
+    clearButton.hidden = state.searchQuery.length === 0;
+  }
+
+  if (count) {
+    count.textContent = ticketSearchCountText();
+  }
+}
+
+function renderSearchAwareTicketTitle(ticket: Ticket) {
+  const match = ticketTitleSearchMatch(ticket);
+
+  if (!match) {
+    return renderTicketTitle(ticket.title);
+  }
+
+  return `<span class="ticket-title ticket-title-search">${renderTicketSearchSegments(match.segments)}</span>`;
+}
+
+function ticketTitleSearchMatch(ticket: Ticket) {
+  return ticketSearchResult(ticket.id)?.matches.find(
+    (match) => match.field === "title" && hasMatchedSearchSegment(match.segments)
+  ) ?? null;
+}
+
+function renderTicketSearchSnippet(ticket: Ticket, placement: "card" | "table") {
+  const snippet = bestTicketSearchSnippet(ticket);
+
+  if (!snippet) {
+    return "";
+  }
+
+  const label = ticketSearchFieldLabel(snippet.field);
+  const labelHtml = label ? `<span class="search-snippet-label">${escapeHtml(label)}</span>` : "";
+
+  return `
+    <div class="search-snippet search-snippet-${placement}">
+      ${labelHtml}
+      <span class="search-snippet-text">${renderTicketSearchSegments(snippet.segments)}</span>
+    </div>
+  `;
+}
+
+function bestTicketSearchSnippet(ticket: Ticket): { field: TicketSearchField; segments: TicketSearchSegment[] } | null {
+  const result = ticketSearchResult(ticket.id);
+
+  if (!result) {
+    return null;
+  }
+
+  const match = result.matches.find((candidate) => {
+    if (candidate.field === "title") {
+      return false;
+    }
+
+    return hasMatchedSearchSegment(ticketSearchSnippetSegments(candidate));
+  });
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    field: match.field,
+    segments: ticketSearchSnippetSegments(match)
+  };
+}
+
+function ticketSearchResult(ticketId: string) {
+  return hasActiveTicketSearch() ? state.searchResultMap.get(ticketId) ?? null : null;
+}
+
+function ticketSearchSnippetSegments(match: TicketSearchMatch) {
+  return match.snippetSegments ?? match.snippet_segments ?? match.segments;
+}
+
+function hasMatchedSearchSegment(segments: TicketSearchSegment[]) {
+  return segments.some((segment) => segment.matched);
+}
+
+function ticketSearchFieldLabel(field: TicketSearchField) {
+  if (field === "body") {
+    return "";
+  }
+
+  const labels: Record<TicketSearchField, string> = {
+    title: "Title",
+    body: "",
+    status: "Status",
+    priority: "Priority",
+    size: "Size",
+    prLink: "PR",
+    assignee: "Assignee",
+    id: "ID",
+    filePath: "Path",
+    rank: "Rank",
+    createdAt: "Created",
+    updatedAt: "Updated"
+  };
+
+  return labels[field];
+}
+
+function captureSearchFocusSnapshot(): SearchFocusSnapshot {
+  const input = document.activeElement;
+
+  if (!(input instanceof HTMLInputElement) || !input.matches("[data-search-input]")) {
+    return null;
+  }
+
+  return {
+    start: input.selectionStart,
+    end: input.selectionEnd
+  };
+}
+
+function restoreSearchFocusSnapshot(snapshot: SearchFocusSnapshot) {
+  if (!snapshot) {
+    return;
+  }
+
+  const input = document.querySelector<HTMLInputElement>("[data-search-input]");
+
+  if (!input) {
+    return;
+  }
+
+  input.focus({ preventScroll: true });
+
+  if (snapshot.start !== null && snapshot.end !== null) {
+    input.setSelectionRange(snapshot.start, snapshot.end);
+  }
 }
 
 function columnForStatus(status: Status) {
@@ -3538,6 +3975,10 @@ async function chooseTableSelectorValue(value: string | undefined, source: HTMLE
       nextTicket.size ?? null
     ));
     state.tickets = state.tickets.map((candidate) => (candidate.id === updated.id ? updated : candidate)).sort(sortTickets);
+    if (await rerunActiveTicketSearch({ preserveScroll: true })) {
+      focusTicket(updated.id);
+      return;
+    }
     render({ preserveScroll: true });
     focusTicket(updated.id);
   } catch (error) {
@@ -4333,6 +4774,7 @@ function hydrateIcons() {
       Plus,
       RefreshCw,
       Save,
+      Search,
       Table2,
       Trash2,
       X

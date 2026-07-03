@@ -34,6 +34,8 @@ execFileSync(
     resolve(repoRoot, "src/tickets/ordering.ts"),
     resolve(repoRoot, "src/tickets/paths.ts"),
     resolve(repoRoot, "src/tickets/table.ts"),
+    resolve(repoRoot, "src/api/mockStore.ts"),
+    resolve(repoRoot, "src/markdown/escape.ts"),
     resolve(repoRoot, "src/markdown/render.ts"),
     resolve(repoRoot, "src/markdown/title.ts"),
     resolve(repoRoot, "src/markdown/images.ts"),
@@ -45,6 +47,7 @@ execFileSync(
 const ordering = await import(pathToFileURL(join(outDir, "tickets/ordering.js")).href);
 const paths = await import(pathToFileURL(join(outDir, "tickets/paths.js")).href);
 const table = await import(pathToFileURL(join(outDir, "tickets/table.js")).href);
+const search = await import(pathToFileURL(join(outDir, "api/mockStore.js")).href);
 const markdown = await import(pathToFileURL(join(outDir, "markdown/render.js")).href);
 const title = await import(pathToFileURL(join(outDir, "markdown/title.js")).href);
 const images = await import(pathToFileURL(join(outDir, "markdown/images.js")).href);
@@ -281,4 +284,71 @@ test("quick-add textarea expands to its content height", () => {
   quickAddTextarea.resizeAutosizeTextarea(textarea);
 
   assert.equal(textarea.style.height, "92px");
+});
+
+test("renderTicketSearchSegments escapes text before marking matches", () => {
+  assert.equal(
+    search.renderTicketSearchSegments([
+      { text: "<img src=x onerror=alert(1)> ", matched: false },
+      { text: "& match", matched: true }
+    ]),
+    "&lt;img src=x onerror=alert(1)&gt; <mark>&amp; match</mark>"
+  );
+});
+
+test("filterTicketsBySearchResults applies active search and restores unfiltered order", () => {
+  const tickets = [
+    ticket({ id: "first" }),
+    ticket({ id: "second" }),
+    ticket({ id: "third" })
+  ];
+  const results = [{ ticket: tickets[1], score: 10, matches: [] }];
+
+  assert.deepEqual(search.filterTicketsBySearchResults(tickets, results, true).map((item) => item.id), ["second"]);
+  assert.deepEqual(search.filterTicketsBySearchResults(tickets, results, false).map((item) => item.id), [
+    "first",
+    "second",
+    "third"
+  ]);
+});
+
+test("filterTicketsBySearchResults shows no stale tickets after active search results clear", () => {
+  const tickets = [ticket({ id: "stale" })];
+
+  assert.deepEqual(search.filterTicketsBySearchResults(tickets, [], true), []);
+});
+
+test("active search disables reorder and marks mutations for rerun", () => {
+  assert.equal(search.shouldDisableSearchReorder("ready work"), true);
+  assert.equal(search.shouldDisableSearchReorder("   "), false);
+  assert.equal(search.shouldRerunTicketSearchAfterMutation("P1"), true);
+  assert.equal(search.shouldRerunTicketSearchAfterMutation(""), false);
+});
+
+test("mock search returns body snippets with escaped highlighted segments", () => {
+  const result = search.searchTicketsForMock(
+    [
+      ticket({
+        id: "body-match",
+        title: "Body match",
+        body: "Before <script> alert </script> after"
+      }),
+      ticket({
+        id: "other",
+        title: "Other",
+        body: "No matching text"
+      })
+    ],
+    "script"
+  );
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].ticket.id, "body-match");
+
+  const bodyMatch = result[0].matches.find((match) => match.field === "body");
+  assert.ok(bodyMatch);
+  assert.equal(
+    search.renderTicketSearchSegments(bodyMatch.snippetSegments),
+    "Before &lt;<mark>script</mark>&gt; alert &lt;/<mark>script</mark>&gt; after"
+  );
 });
